@@ -1600,7 +1600,7 @@ int main()
     // Our tests
     RBFTest_11(rbfm, rids, sizes);
 	pfmTest();
-//    fhTest();
+    //fhTest();
 	rbfmTest();
 
     cleanup();

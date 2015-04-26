@@ -20,8 +20,7 @@ RecordBasedFileManager::RecordBasedFileManager()
 
 RecordBasedFileManager::~RecordBasedFileManager() 
 {
-    if (_rbf_manager)
-        _rbf_manager = NULL;
+    _rbf_manager = NULL;
 }
 
 
@@ -29,13 +28,13 @@ RC RecordBasedFileManager::createFile(const string &fileName)
 {
     // Request new file from PFM
     RC ret = _pfm.createFile(fileName);
-    if (ret != 0) {
+    if (ret != err::OK) {
         return ret;
     }
     // Open handle to file
     FileHandle fileHandle;
     ret = openFile(fileName, fileHandle);
-    if (ret != 0)
+    if (ret != err::OK)
         return ret;
 
     // Create index for page 0
@@ -113,6 +112,8 @@ unsigned RecordBasedFileManager::freeSpaceSize(void* pageData)
     return space;
 }
 
+// Stores pageNum with the number of the first page that has enought
+// space to store numbytes of data
 RC RecordBasedFileManager::findSpace(FileHandle &fileHandle, 
                                      unsigned numbytes,
                                      PageNum& pageNum) 
@@ -120,7 +121,7 @@ RC RecordBasedFileManager::findSpace(FileHandle &fileHandle,
     RC ret;
     bool pageFound = false;
     unsigned char *buffer[PAGE_SIZE] = {0};
-    for(pageNum = 0; pageNum < fileHandle.getNumberOfPages(); pageNum++) {
+    for (pageNum = 0; pageNum < fileHandle.getNumberOfPages(); pageNum++) {
         ret = fileHandle.readPage(pageNum, buffer);
         if (ret != 0)
             return ret;
@@ -132,7 +133,7 @@ RC RecordBasedFileManager::findSpace(FileHandle &fileHandle,
     if (not pageFound) {
         unsigned requiredPages = 1 + ((numbytes - 1) / PAGE_SIZE);
         for (unsigned i = 0; i < requiredPages; i++) {
-            memset(buffer, 0, PAGE_SIZE);
+            memset(buffer, 0, PAGE_SIZE); // unnecessary?
             PageIndex index;
             index.pageNum = pageNum + i;
             index.freeMemoryOffset = 0;
@@ -146,13 +147,13 @@ RC RecordBasedFileManager::findSpace(FileHandle &fileHandle,
                 return ret;
         }
     }
-    return 0;
+    return err::OK;
 }
 
 RC RecordBasedFileManager::insertRecord(FileHandle &fileHandle, 
                                         const vector<Attribute> &recordDescriptor, 
                                         const void *data, 
-                                        RID &rid) 
+                                        RID &rid)
 {
     // Figure out how large the stored data is and set pageNum to that
     // determined by findSpace
@@ -163,37 +164,19 @@ RC RecordBasedFileManager::insertRecord(FileHandle &fileHandle,
     unsigned offsetIndex = 0;
     unsigned dataOffset = 0;
 
-    // Allocate an array of offets with N entries, where N is the number of fields as indicated
-    // by the recordDescriptor vector. Each entry i in this array points to the address offset,
-    // from the base address of the record on disk, where the i-th field is stored. 
     unsigned* offsets = (unsigned*) malloc(offsetFieldsSize);
 
-    // Determine offsets for each field by branching on attribute type
+    // Determine offsets for each field 
     for (auto it = recordDescriptor.begin(); it != recordDescriptor.end(); ++it) {
         offsets[offsetIndex++] = recLength;
-        int count = 0;
         Attribute attr = *it;
-        switch(attr.type) {
-        case TypeInt:
-            recLength += sizeof(int);
-            dataOffset += sizeof(int);
-            break;
-
-        case TypeReal:
-            recLength += sizeof(float);
-            dataOffset += sizeof(float);
-            break;
-
-        case TypeVarChar:
-            memcpy(&count, (char*)data + dataOffset, sizeof(int)); 
-            dataOffset += sizeof(int) + count * sizeof(char);
-            recLength += sizeof(int) + count * sizeof(char);
-            break;
-
-        default:
+        unsigned attrSize = Attribute::size(attr.type, (char *)data + dataOffset);
+        if (attrSize == 0) {
             free(offsets);
             return err::ATTRIBUTE_INVALID_TYPE;
         }
+        recLength += attrSize;
+        dataOffset += attrSize;
     }
 
     ret = findSpace(fileHandle, recLength + sizeof(PageIndexEntry), pageNum);
@@ -234,7 +217,6 @@ RC RecordBasedFileManager::insertRecord(FileHandle &fileHandle,
     // Update index information and write it back to page
     index->numSlots++;
     index->freeMemoryOffset += recLength;
-    writePageIndex(buffer, index);
  
     // Write page
     ret = fileHandle.writePage(pageNum, buffer);
@@ -245,7 +227,7 @@ RC RecordBasedFileManager::insertRecord(FileHandle &fileHandle,
     rid.pageNum = pageNum;
     rid.slotNum = index->numSlots - 1;
 
-    return 0;
+    return err::OK;
 }
 
 RC RecordBasedFileManager::readRecord(FileHandle &fileHandle,
@@ -286,29 +268,32 @@ RC RecordBasedFileManager::readRecord(FileHandle &fileHandle,
     }
 }
 
-RC deleteRecord(FileHandle &fileHandle, 
-                const vector<Attribute> &recordDescriptor, 
-                const RID &rid)
+
+RC RecordBasedFileManager::deleteRecord(FileHandle &fileHandle, 
+                                        const vector<Attribute> &recordDescriptor, 
+                                        const RID &rid)
 {
     unsigned char buffer[PAGE_SIZE] = {0};
     RC ret = fileHandle.readPage(rid.pageNum, buffer);
     if (ret != err::OK)
         return ret;
 
+    PageIndex *index = getPageIndex(buffer);
     PageIndexEntry *entry = getPageIndexEntry(buffer, rid.slotNum);
 
     switch (entry->type)
     {
         case ALIVE: 
             {
-            int fieldOffset = recordDescriptor.size() * sizeof(unsigned);
-            memcpy(data, buffer + entry->recordOffset + fieldOffset, entry->recordSize - fieldOffset);
-            return err::OK;
+                // This record is on this page and should be deleted
+                return -1;
             }
         case DEAD:
             return err::RECORD_DOES_NOT_EXIST;
         case TOMBSTONE:
-            return readRecord(fileHandle, recordDescriptor, entry->tombStoneRID, data);
+            // Delete this and all subsequent tombstones
+            //
+            return -1;
     }
 
     return -1;
@@ -393,3 +378,16 @@ RC RecordBasedFileManager::printRecord(const vector<Attribute> &recordDescriptor
     return 0;
 }
 
+unsigned Attribute::size(AttrType type, const void* value)
+{
+    switch(type) {
+        case TypeInt:
+            return sizeof(int);
+        case TypeReal:
+            return sizeof(float);
+        case TypeVarChar:
+            return sizeof(unsigned) + sizeof(char) * (* (unsigned *)value);
+        default:
+            return 0;
+    }
+}

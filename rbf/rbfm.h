@@ -46,6 +46,8 @@ struct Attribute {
     string   name;     // attribute name
     AttrType type;     // attribute type
     AttrLength length; // attribute length
+
+    static unsigned size(AttrType type, const void* value);
 };
 
 // Comparison Operator (NOT needed for part 1 of the project)
