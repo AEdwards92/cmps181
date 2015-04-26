@@ -52,19 +52,26 @@ RC PagedFileManager::createFile(const string &fileName) {
 RC PagedFileManager::destroyFile(const string &fileName) {
     FILE *file;
     char signature[SIGNATURE_SIZE + 1];
+    if (not fileExists(fileName))
+        return err::FILE_COULD_NOT_DELETE;
+
     file = fopen(fileName.c_str(), "rb");
     if (file == NULL)
         return err::FILE_COULD_NOT_OPEN; 
     fgets(signature, SIGNATURE_SIZE + 1, file);
 
     if (strcmp(signature, SIGNATURE) != 0)
-        return 2;
+        return err::FILE_CORRUPT;
 
     if (fclose(file) == EOF)
-        return 3; // Error closing file
+        return err::FILE_CORRUPT; // Error closing file
+
+    if (handleCount.find(fileName) != handleCount.end()
+        and handleCount[fileName] > 0)
+        return err::FILE_COULD_NOT_DELETE;
     
     if (remove(fileName.c_str()) != 0)
-        return 4;
+        return err::FILE_COULD_NOT_DELETE;
 
     return 0;
 }
@@ -85,6 +92,9 @@ RC PagedFileManager::openFile(const string &fileName, FileHandle &fileHandle) {
     if (fileHandle.hasFile())
         return err::FILE_HANDLE_ALREADY_INITIALIZED;
 
+    if (not fileExists(fileName))
+        return err::FILE_NOT_FOUND;
+
     FILE *file;
     char signature[SIGNATURE_SIZE + 1];
     file = fopen(fileName.c_str(), "rb+");
@@ -96,6 +106,12 @@ RC PagedFileManager::openFile(const string &fileName, FileHandle &fileHandle) {
     if (strcmp(signature, SIGNATURE) != 0)
         return err::FILE_CORRUPT;
 
+    if (handleCount.find(fileName) != handleCount.end())
+        handleCount[fileName] += 1;
+    else
+        handleCount[fileName] = 1;
+
+    fileHandle.fileName = fileName;
     return fileHandle.loadFile(file);
 }
 
@@ -106,6 +122,8 @@ RC PagedFileManager::openFile(const string &fileName, FileHandle &fileHandle) {
 RC PagedFileManager::closeFile(FileHandle &fileHandle) {
     if (not fileHandle.hasFile())
         return err::FILE_HANDLE_NOT_INITIALIZED;
+
+    handleCount[fileHandle.fileName] -= 1;
 
     fileHandle.unloadFile();
 

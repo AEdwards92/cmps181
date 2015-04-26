@@ -73,8 +73,8 @@ PageIndex* RecordBasedFileManager::getPageIndex(void* buffer)
     return (PageIndex*)((char*)buffer + PAGE_SIZE - sizeof(PageIndex));
 }
 
-void RecordBasedFileManager::writePageIndex(void *buffer, 
-                                            PageIndex *index) 
+void RecordBasedFileManager::writePageIndex(void* buffer, 
+                                            PageIndex* index) 
 {
     unsigned offset = PAGE_SIZE - sizeof(PageIndex);
     memcpy((char*)buffer + offset, index, sizeof(PageIndex));
@@ -120,7 +120,7 @@ RC RecordBasedFileManager::findSpace(FileHandle &fileHandle,
 {
     RC ret;
     bool pageFound = false;
-    unsigned char *buffer[PAGE_SIZE] = {0};
+    unsigned char buffer[PAGE_SIZE] = {0};
     for (pageNum = 0; pageNum < fileHandle.getNumberOfPages(); pageNum++) {
         ret = fileHandle.readPage(pageNum, buffer);
         if (ret != 0)
@@ -150,21 +150,18 @@ RC RecordBasedFileManager::findSpace(FileHandle &fileHandle,
     return err::OK;
 }
 
-RC RecordBasedFileManager::insertRecord(FileHandle &fileHandle, 
-                                        const vector<Attribute> &recordDescriptor, 
-                                        const void *data, 
-                                        RID &rid)
+RC RecordBasedFileManager::prepareRecord(const vector<Attribute> &recordDescriptor,
+                                         const void* data,
+                                         unsigned*& offsets,
+                                         unsigned& recLength,
+                                         unsigned& offsetFieldsSize)
 {
-    // Figure out how large the stored data is and set pageNum to that
-    // determined by findSpace
-    PageNum pageNum;
-    RC ret = 0;
-    const unsigned offsetFieldsSize = sizeof(unsigned) * recordDescriptor.size();
-    unsigned recLength = sizeof(unsigned) * recordDescriptor.size();
+    offsetFieldsSize = sizeof(unsigned) * recordDescriptor.size();
+    recLength = offsetFieldsSize;
     unsigned offsetIndex = 0;
     unsigned dataOffset = 0;
 
-    unsigned* offsets = (unsigned*) malloc(offsetFieldsSize);
+    offsets = (unsigned*) malloc(offsetFieldsSize);
 
     // Determine offsets for each field 
     for (auto it = recordDescriptor.begin(); it != recordDescriptor.end(); ++it) {
@@ -178,7 +175,23 @@ RC RecordBasedFileManager::insertRecord(FileHandle &fileHandle,
         recLength += attrSize;
         dataOffset += attrSize;
     }
+    return err::OK;
+}
 
+RC RecordBasedFileManager::insertRecord(FileHandle &fileHandle, 
+                                        const vector<Attribute> &recordDescriptor, 
+                                        const void* data, 
+                                        RID &rid)
+{
+    // Figure out how large the stored data is and set pageNum to that
+    // determined by findSpace
+    PageNum pageNum;
+    RC ret = 0;
+    unsigned offsetFieldsSize = 0;
+    unsigned recLength = 0;
+    unsigned* offsets = NULL;
+
+    prepareRecord(recordDescriptor, data, offsets, recLength, offsetFieldsSize);
     ret = findSpace(fileHandle, recLength + sizeof(PageIndexEntry), pageNum);
     if (ret != 0) {
         free(offsets);
@@ -195,7 +208,6 @@ RC RecordBasedFileManager::insertRecord(FileHandle &fileHandle,
 
     // Copy the index
     PageIndex* index = getPageIndex(buffer);
-    //memcpy(&index, buffer + PAGE_SIZE - sizeof(PageIndex), sizeof(PageIndex));
  
     // Now we write the record at the start of free memeory
     memcpy(buffer + index->freeMemoryOffset, offsets, offsetFieldsSize);
@@ -210,8 +222,6 @@ RC RecordBasedFileManager::insertRecord(FileHandle &fileHandle,
     entry.recordOffset = index->freeMemoryOffset;
     
     // Copy index entry to list.
-    // buffer + PAGE_SIZE - sizeof(PageIndex) - (n + 1) * sizeof(PageIndexEntry)
-    // where n = index.numSlots
     writePageIndexEntry(buffer, index->numSlots, &entry); 
 
     // Update index information and write it back to page
@@ -233,7 +243,7 @@ RC RecordBasedFileManager::insertRecord(FileHandle &fileHandle,
 RC RecordBasedFileManager::readRecord(FileHandle &fileHandle,
                                       const vector<Attribute> &recordDescriptor, 
                                       const RID &rid, 
-                                      void *data) 
+                                      void* data) 
 {
     // Read in the page specified by pageNum
     unsigned char buffer[PAGE_SIZE] = {0};
@@ -241,17 +251,7 @@ RC RecordBasedFileManager::readRecord(FileHandle &fileHandle,
     if (ret != 0) 
         return ret;
 
-    PageIndexEntry *entry = getPageIndexEntry(buffer, rid.slotNum);
-
-    // Now that we have the index entry, we must check what
-    // type of index entry it is. There are three cases:
-    //  - Alive:     Most typical state. Provides the fields
-    //               recordSize and recordOffset.
-    //  - Dead:      Entry no longer exists. This should trigger
-    //               an error.
-    //  - Tombstone: The record that used to be here now is elsewhere.
-    //               The field tombStoneRID has the new RID. In this 
-    //               case we make a recursive call to readRecord.
+    PageIndexEntry* entry = getPageIndexEntry(buffer, rid.slotNum);
 
     switch (entry->type)
     {
@@ -268,6 +268,24 @@ RC RecordBasedFileManager::readRecord(FileHandle &fileHandle,
     }
 }
 
+RC RecordBasedFileManager::deleteRID(FileHandle& fileHandle,
+                                     PageIndex* index,
+                                     PageIndexEntry* entry,
+                                     unsigned char* buffer,
+                                     const RID& rid)
+{
+    // If this is the last slot, we can recover its storage space
+    // as freespace
+    if (rid.slotNum == index->numSlots - 1) {
+        index->freeMemoryOffset -= entry->recordSize;
+        index->numSlots -= 1;
+    } else {
+        entry->recordSize = 0;
+        entry->type = DEAD;
+    }
+    return fileHandle.writePage(rid.pageNum, buffer);
+}
+
 
 RC RecordBasedFileManager::deleteRecord(FileHandle &fileHandle, 
                                         const vector<Attribute> &recordDescriptor, 
@@ -278,58 +296,165 @@ RC RecordBasedFileManager::deleteRecord(FileHandle &fileHandle,
     if (ret != err::OK)
         return ret;
 
-    PageIndex *index = getPageIndex(buffer);
-    PageIndexEntry *entry = getPageIndexEntry(buffer, rid.slotNum);
+    PageIndex* index = getPageIndex(buffer);
+    PageIndexEntry* entry = getPageIndexEntry(buffer, rid.slotNum);
 
     switch (entry->type)
     {
         case ALIVE: 
-            {
-                // This record is on this page and should be deleted
-                return -1;
-            }
+            // This record is on this page and should be deleted
+            return deleteRID(fileHandle, index, entry, buffer, rid);
         case DEAD:
             return err::RECORD_DOES_NOT_EXIST;
         case TOMBSTONE:
-            // Delete this and all subsequent tombstones
-            //
-            return -1;
+            ret = deleteRID(fileHandle, index, entry, buffer, rid);
+            if (ret != err::OK) 
+                return ret;
+            return deleteRecord(fileHandle, recordDescriptor, entry->tombStoneRID);
     }
 
-    return -1;
 }
 
 // Assume the rid does not change after update
-RC updateRecord(FileHandle &fileHandle, 
+RC RecordBasedFileManager::updateRecord(FileHandle &fileHandle, 
                 const vector<Attribute> &recordDescriptor,
-                const void *data, 
+                const void* data, 
                 const RID &rid)
+{
+    RC ret = 0;
+    unsigned offsetFieldsSize = 0;
+    unsigned recLength = 0;
+    unsigned* offsets = NULL;
+
+    prepareRecord(recordDescriptor, data, offsets, recLength, offsetFieldsSize);
+    
+    // Read in the page specified by the RID
+    unsigned char buffer[PAGE_SIZE] = {0};
+    ret = fileHandle.readPage(rid.pageNum, buffer);
+    if (ret != 0) 
+        return ret;
+
+    PageIndex* index = getPageIndex(buffer);
+    PageIndexEntry* entry = getPageIndexEntry(buffer, rid.slotNum);
+
+    // First off, check to make sure that the record is not dead
+    if (entry->type == DEAD)
+        return err::RECORD_DOES_NOT_EXIST;
+
+    // Next, check if it is a tombstone. If so, make recursive call
+    if (entry->type == TOMBSTONE)
+        return updateRecord(fileHandle, recordDescriptor, data, entry->tombStoneRID);
+
+    // Otherwise, check if we can update in place
+    if (rid.slotNum == index->numSlots - 1) {
+        // If this is the last record, and there is enough freespace to keep the updated record
+        // in the page, then we do so
+        unsigned freespace = freeSpaceSize(buffer);
+        if (recLength - entry->recordSize <= freespace) {
+            entry->recordSize = recLength;
+            index->freeMemoryOffset = entry->recordOffset + entry->recordSize;
+            memcpy(buffer + entry->recordOffset, offsets, offsetFieldsSize);
+            memcpy(buffer + entry->recordOffset + offsetFieldsSize, data, recLength - offsetFieldsSize);
+            return fileHandle.writePage(rid.pageNum, buffer);
+        }
+    } 
+
+    // In this case, it is not the last record, but if it is small enough we can use the same location
+    if (recLength <= entry->recordSize) {
+        entry->recordSize = recLength;
+        memcpy(buffer + entry->recordOffset, offsets, offsetFieldsSize);
+        memcpy(buffer + entry->recordOffset + offsetFieldsSize, data, recLength - offsetFieldsSize);
+        return fileHandle.writePage(rid.pageNum, buffer);
+    }
+    // There is no way to update in place, so we must store updated record in new page and
+    // leave a tombstone
+    PageNum pageNum;
+    unsigned char newBuffer[PAGE_SIZE] = {0};
+    ret = findSpace(fileHandle, recLength + sizeof(PageIndexEntry), pageNum);
+    if (ret != 0) {
+        free(offsets);
+        return ret;
+    }
+
+    // Read in the page specified by pageNum
+    ret = fileHandle.readPage(pageNum, newBuffer);
+    if (ret != 0) {
+        free(offsets);
+        return ret;
+    }
+
+    // Copy the index
+    PageIndex* newIndex = getPageIndex(newBuffer);
+ 
+    // Now we write the record at the start of free memeory
+    memcpy(newBuffer + newIndex->freeMemoryOffset, offsets, offsetFieldsSize);
+    memcpy(newBuffer + newIndex->freeMemoryOffset + offsetFieldsSize, data, recLength - offsetFieldsSize);
+    free(offsets);
+
+    // Prepare a new index entry to prepend to the list of entries
+    PageIndexEntry newEntry;
+    newEntry.type = ALIVE;
+    newEntry.recordSize = recLength;
+    newEntry.recordOffset = newIndex->freeMemoryOffset;
+    
+    // Copy index entry to list.
+    writePageIndexEntry(newBuffer, newIndex->numSlots, &newEntry); 
+
+    // Update index information and write it back to page
+    newIndex->numSlots++;
+    newIndex->freeMemoryOffset += recLength;
+ 
+    // Write page
+    ret = fileHandle.writePage(pageNum, newBuffer);
+    if (ret != 0)
+        return ret;
+
+    // After writing, update entry to be a tombstone
+    entry->type = TOMBSTONE;
+    entry->tombStoneRID.pageNum = pageNum;
+    entry->tombStoneRID.slotNum = newIndex->numSlots - 1;
+
+    return fileHandle.writePage(rid.pageNum, buffer);
+}
+
+RC RecordBasedFileManager::readAttribute(FileHandle &fileHandle, 
+                 const vector<Attribute> &recordDescriptor, 
+                 const RID &rid, 
+                 const string &attributeName, 
+                 void* data)
 {
     return -1;
 }
 
-RC readAttribute(FileHandle &fileHandle, 
-                 const vector<Attribute> &recordDescriptor, 
-                 const RID &rid, 
-                 const string &attributeName, 
-                 void *data)
+RC RecordBasedFileManager::reorganizePage(FileHandle &fileHandle, 
+                                          const vector<Attribute> &recordDescriptor, 
+                                          const unsigned pageNumber)
 {
     return -1;
 }
 
 // scan returns an iterator to allow the caller to go through the results one by one. 
-RC scan(FileHandle &fileHandle,
-    const vector<Attribute> &recordDescriptor,
-    const string &conditionAttribute,
-    const CompOp compOp,                  // comparision type such as "<" and "="
-    const void *value,                    // used in the comparison
-    const vector<string> &attributeNames, // a list of projected attributes
-    RBFM_ScanIterator &rbfm_ScanIterator)
+RC RecordBasedFileManager::scan(FileHandle &fileHandle,
+                                const vector<Attribute> &recordDescriptor,
+                                const string &conditionAttribute,
+                                const CompOp compOp,                  // comparision type such as "<" and "="
+                                const void* value,                    // used in the comparison
+                                const vector<string> &attributeNames, // a list of projected attributes
+                                RBFM_ScanIterator &rbfm_ScanIterator)
 {
     return -1;
 }
 
-RC RecordBasedFileManager::printRecord(const vector<Attribute> &recordDescriptor, const void *data) {
+RC RecordBasedFileManager::reorganizeFile(FileHandle &fileHandle, 
+                                          const vector<Attribute> &recordDescriptor) 
+{
+    return -1;
+
+}
+
+RC RecordBasedFileManager::printRecord(const vector<Attribute> &recordDescriptor, 
+                                       const void* data)
+{
     unsigned index = 0;
     int offset = 0;
     std::ostream& out = std::cout;

@@ -10,6 +10,7 @@ typedef unsigned PageNum;
 #define SIGNATURE_SIZE 8
         
 #include <string>
+#include <map>
 #include <climits>
 using namespace std;
 
@@ -37,7 +38,7 @@ class PagedFileManager {
 
   private:
     static PagedFileManager *_pf_manager;
-
+    map<string,int> handleCount;
     bool fileExists(const string &fileName);
 };
 
@@ -80,6 +81,7 @@ class FileHandle {
 
   private:
     FILE *_file = NULL;
+    string fileName;
     unsigned _pageCounter;
 }; 
 

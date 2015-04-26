@@ -25,6 +25,8 @@ namespace err {
         RECORD_CORRUPT,
         RECORD_SIZE_INVALID,
         RECORD_EXCEEDS_PAGE_SIZE,
+        RECORD_DELETED,
+        RECORD_IS_ANCHOR,
 
         HEADER_SIZE_CORRUPT,
         HEADER_PAGESIZE_MISMATCH,
@@ -33,7 +35,17 @@ namespace err {
         HEADER_FREESPACE_LISTS_CORRUPT,
         HEADER_SIZE_TOO_LARGE,
 
+        PAGE_CANNOT_BE_ORGANIZED,
+
+        TABLE_NOT_FOUND,
+        TABLE_ALREADY_CREATED,
+        TABLE_NAME_TOO_LONG,
+
         ATTRIBUTE_INVALID_TYPE,
+        ATTRIBUTE_NOT_FOUND,
+        ATTRIBUTE_NAME_TOO_LONG,
+        ATTRIBUTE_COUNT_MISMATCH,
+
         OUT_OF_MEMORY
     };
     const char* errToString(int errnum);
