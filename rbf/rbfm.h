@@ -22,11 +22,19 @@ struct PageIndex {
     unsigned numSlots;
 };
 
+enum PageIndexEntryType { ALIVE = 0, DEAD, TOMBSTONE };
+
 // Page Index Entry
 // Contains information for accessing record in page
 struct PageIndexEntry {
-    unsigned recordSize;
-    unsigned recordOffset;
+    enum PageIndexEntryType type;
+    union {
+        struct {
+            unsigned recordSize;
+            unsigned recordOffset;
+        };
+        RID tombStoneRID;
+    };
 };
 
 // Attribute
@@ -38,8 +46,6 @@ struct Attribute {
     string   name;     // attribute name
     AttrType type;     // attribute type
     AttrLength length; // attribute length
-
-    static unsigned sizeInBytes(AttrType type, const void* value);
 };
 
 // Comparison Operator (NOT needed for part 1 of the project)
@@ -91,7 +97,15 @@ public:
   
   RC openFile(const string &fileName, FileHandle &fileHandle);
   
-  RC closeFile(FileHandle &fileHandle);
+  RC closeFile(FileHandle &fileHandle); 
+
+  PageIndex* getPageIndex(void* buffer);
+
+  void writePageIndex(void* buffer, PageIndex *index);
+
+  PageIndexEntry* getPageIndexEntry(void* buffer, unsigned slotNum);
+
+  void writePageIndexEntry(void* buffer, unsigned slotNum, PageIndexEntry *entry);
 
   unsigned freeSpaceSize(void* pageData);
 

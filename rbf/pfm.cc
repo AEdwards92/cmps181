@@ -36,10 +36,10 @@ RC PagedFileManager::createFile(const string &fileName) {
     FILE *file;
     file = fopen(fileName.c_str(), "wb");
     if (file == NULL)
-        return err::FILE_OPEN_FAILURE; 
+        return err::FILE_COULD_NOT_OPEN; 
 
     if (fputs(SIGNATURE, file) == EOF)
-        return err::FILE_WRITE_ERROR; 
+        return err::FILE_CORRUPT; 
 
     fclose(file);
 
@@ -54,7 +54,7 @@ RC PagedFileManager::destroyFile(const string &fileName) {
     char signature[SIGNATURE_SIZE + 1];
     file = fopen(fileName.c_str(), "rb");
     if (file == NULL)
-        return err::FILE_OPEN_FAILURE; 
+        return err::FILE_COULD_NOT_OPEN; 
     fgets(signature, SIGNATURE_SIZE + 1, file);
 
     if (strcmp(signature, SIGNATURE) != 0)
@@ -83,18 +83,18 @@ RC PagedFileManager::destroyFile(const string &fileName) {
 RC PagedFileManager::openFile(const string &fileName, FileHandle &fileHandle) {
     // fileHandle must not be handle for some open file
     if (fileHandle.hasFile())
-        return err::FILE_HANDLE_ACTIVE;
+        return err::FILE_HANDLE_ALREADY_INITIALIZED;
 
     FILE *file;
     char signature[SIGNATURE_SIZE + 1];
     file = fopen(fileName.c_str(), "rb+");
     if (file == NULL)
-        return err::FILE_OPEN_FAILURE; 
+        return err::FILE_COULD_NOT_OPEN; 
     fgets(signature, SIGNATURE_SIZE + 1, file);
 
     // must be created by PFM
     if (strcmp(signature, SIGNATURE) != 0)
-        return err::FILE_HEADER_INVALID;
+        return err::FILE_CORRUPT;
 
     return fileHandle.loadFile(file);
 }
@@ -105,7 +105,7 @@ RC PagedFileManager::openFile(const string &fileName, FileHandle &fileHandle) {
 
 RC PagedFileManager::closeFile(FileHandle &fileHandle) {
     if (not fileHandle.hasFile())
-        return err::FILE_HANDLE_INACTIVE;
+        return err::FILE_HANDLE_NOT_INITIALIZED;
 
     fileHandle.unloadFile();
 
@@ -222,7 +222,7 @@ RC FileHandle::unloadFile() {
 
 RC FileHandle::updatePageCounter() {
     if (not hasFile())
-        return err::FILE_HANDLE_INACTIVE;
+        return err::FILE_HANDLE_NOT_INITIALIZED;
 
     if (fseek(_file, 0, SEEK_END) != 0)
         return err::FILE_SEEK_FAILED;

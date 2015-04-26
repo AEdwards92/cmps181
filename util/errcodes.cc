@@ -1,23 +1,39 @@
 #include "errcodes.h"
 
-using namespace rc;
+namespace err
+{
+    const char* errToString(int errnum) {
+        switch ((ErrorCode) errnum) 
+        {
+            case UNKNOWN_FAILURE:                       return "UNKNOWN_FAILURE";
+            case OK:                                    return "OK";
+            case FEATURE_NOT_YET_IMPLEMENTED:           return "FEATURE_NOT_YET_IMPLEMENTED";
+            case FILE_PAGE_NOT_FOUND:                   return "FILE_PAGE_NOT_FOUND";
+            case FILE_SEEK_FAILED:                      return "FILE_SEEK_FAILED";
+            case FILE_NOT_FOUND:                        return "FILE_NOT_FOUND";
+            case FILE_ALREADY_EXISTS:                   return "FILE_ALREADY_EXISTS";
+            case FILE_CORRUPT:                          return "FILE_CORRUPT";
+            case FILE_COULD_NOT_OPEN:                   return "FILE_COULD_NOT_APPEND";
+            case FILE_COULD_NOT_DELETE:                 return "FILE_COULD_NOT_DELETE";
+            case FILE_HANDLE_ALREADY_INITIALIZED:       return "FILE_HANDLE_ALREADY_INITIALIZED";
+            case FILE_HANDLE_NOT_INITIALIZED:           return "FILE_HANDLE_NOT_INITIALIZED";
+            case FILE_HANDLE_UNKNOWN:                   return "FILE_HANDLE_UNKNOWN";
+            case FILE_NOT_OPENED:                       return "FILE_NOT_OPENED";
+            case RECORD_DOES_NOT_EXIST:                 return "RECORD_DOES_NOT_EXIST";
+            case RECORD_CORRUPT:                        return "RECORD_CORRUPT";
+            case RECORD_EXCEEDS_PAGE_SIZE:              return "RECORD_EXCEEDS_PAGE_SIZE";
+            case HEADER_SIZE_CORRUPT:                   return "HEADER_SIZE_CORRUPT";
+            case HEADER_PAGESIZE_MISMATCH:              return "HEADER_PAGESIZE_MISMATCH";
+            case HEADER_VERSION_MISMATCH:               return "HEADER_VERSION_MISMATCH";
+            case HEADER_FREESPACE_LISTS_MISMATCH:       return "HEADER_FREESPACE_LISTS_MISMATCH";
+            case HEADER_FREESPACE_LISTS_CORRUPT:         return "HEADER_FREESPACE_LIST_CORRUPT";
+            case HEADER_SIZE_TOO_LARGE:                 return "HEADER_SIZE_TOO_LARGE";
+            case RECORD_SIZE_INVALID:                   return "RECORD_SIZE_INVALID";
+            case ATTRIBUTE_INVALID_TYPE:                return "ATTRIBUTE_INVALID_TYPE";
+            case OUT_OF_MEMORY:                         return "OUT_OF_MEMORY";
+        }
 
-string errToString(int errnum) {
-    switch ((ErrorCode) errnum) {
-        case FILE_NOT_FOUND:         return "FILE_NOT_FOUND";
-        case FILE_ALREADY_EXISTS:    return "FILE_ALREADY_EXISTS";
-        case FILE_PAGE_NOT_FOUND:    return "FILE_PAGE_NOT_FOUND";
-        case FILE_SEEK_FAILED:       return "FILE_SEEK_FAILED";
-        case FILE_CORRUPT:           return "FILE_CORRUPT";     
-        case FILE_OPEN_FAILURE:      return "FILE_OPEN_FAILURE";
-        case FILE_REMOVE_FAILURE:    return "FILE_REMOVE_FAILURE";
-        case FILE_NOT_OPENED:        return "FILE_NOT_OPENED";
-        case FILE_WRITE_ERROR:       return "FILE_WRITE_ERROR";
-        case FILE_HEADER_INVALID:    return "FILE_HEADER_INVALID";
-        case FILE_HANDLE_ACTIVE:     return "FILE_HANDLE_ACTIVE";
-        case FILE_HANDLE_INACTIVE:   return "FILE_HANDLE_INACTIVE";
-        case ATTRIBUTE_INVALID_TYPE: return "ATTRIBUTE_INVALID_TYPE";
+        return "UNKNOWN_ERROR_CODE";
     }
-    return "UNKNOWN_ERROR_CODE";
 }
-    
+

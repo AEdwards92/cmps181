@@ -3,21 +3,39 @@
 
 namespace err {
     enum ErrorCode {
-        FILE_NOT_FOUND = 1,
-        FILE_ALREADY_EXISTS,
+        UNKNOWN_FAILURE = -1,
+        OK = 0,
+
+        FEATURE_NOT_YET_IMPLEMENTED,
+
         FILE_PAGE_NOT_FOUND,
         FILE_SEEK_FAILED,
+        FILE_NOT_FOUND,
+        FILE_ALREADY_EXISTS,
         FILE_CORRUPT,
-        FILE_OPEN_FAILURE,
-        FILE_REMOVE_FAILURE,
+        FILE_COULD_NOT_OPEN,
+        FILE_COULD_NOT_DELETE,
         FILE_NOT_OPENED,
-        FILE_WRITE_ERROR,
-        FILE_HEADER_INVALID,
 
-        FILE_HANDLE_ACTIVE,
-        FILE_HANDLE_INACTIVE,
-        ATTRIBUTE_INVALID_TYPE
+        FILE_HANDLE_ALREADY_INITIALIZED,
+        FILE_HANDLE_NOT_INITIALIZED,
+        FILE_HANDLE_UNKNOWN,
+
+        RECORD_DOES_NOT_EXIST,
+        RECORD_CORRUPT,
+        RECORD_SIZE_INVALID,
+        RECORD_EXCEEDS_PAGE_SIZE,
+
+        HEADER_SIZE_CORRUPT,
+        HEADER_PAGESIZE_MISMATCH,
+        HEADER_VERSION_MISMATCH,
+        HEADER_FREESPACE_LISTS_MISMATCH,
+        HEADER_FREESPACE_LISTS_CORRUPT,
+        HEADER_SIZE_TOO_LARGE,
+
+        ATTRIBUTE_INVALID_TYPE,
+        OUT_OF_MEMORY
     };
-    string errToString(int errnum);
+    const char* errToString(int errnum);
 }
 #endif
