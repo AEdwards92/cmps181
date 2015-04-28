@@ -22,7 +22,7 @@ struct PageIndex {
     unsigned numSlots;
 };
 
-enum PageIndexEntryType { ALIVE = 0, DEAD, TOMBSTONE };
+enum PageIndexEntryType { ALIVE = 1, DEAD, TOMBSTONE };
 
 // Page Index Entry
 // Contains information for accessing record in page

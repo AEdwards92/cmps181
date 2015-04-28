@@ -53,7 +53,8 @@ RC RecordBasedFileManager::createFile(const string &fileName)
     return _pfm.closeFile(fileHandle);
 }
 
-RC RecordBasedFileManager::destroyFile(const string &fileName) {
+RC RecordBasedFileManager::destroyFile(const string &fileName) 
+{
     return _pfm.destroyFile(fileName);
 }
 
@@ -251,6 +252,10 @@ RC RecordBasedFileManager::readRecord(FileHandle &fileHandle,
     if (ret != 0) 
         return ret;
 
+    PageIndex* index = getPageIndex(buffer);
+    if (rid.slotNum >= index->numSlots) 
+        return err::RECORD_DELETED;
+
     PageIndexEntry* entry = getPageIndexEntry(buffer, rid.slotNum);
 
     switch (entry->type)
@@ -262,7 +267,7 @@ RC RecordBasedFileManager::readRecord(FileHandle &fileHandle,
             return err::OK;
             }
         case DEAD:
-            return err::RECORD_DOES_NOT_EXIST;
+            return err::RECORD_DELETED;
         case TOMBSTONE:
             return readRecord(fileHandle, recordDescriptor, entry->tombStoneRID, data);
     }
@@ -276,14 +281,35 @@ RC RecordBasedFileManager::deleteRID(FileHandle& fileHandle,
 {
     // If this is the last slot, we can recover its storage space
     // as freespace
-    if (rid.slotNum == index->numSlots - 1) {
-        index->freeMemoryOffset -= entry->recordSize;
-        index->numSlots -= 1;
-    } else {
-        entry->recordSize = 0;
-        entry->type = DEAD;
-    }
+    //if (rid.slotNum == index->numSlots - 1) {
+        //index->freeMemoryOffset -= entry->recordSize;
+        //index->numSlots -= 1;
+    //} else {
+        //entry->recordSize = 0;
+        //entry->type = DEAD;
+    //}
+    entry->recordSize = 0;
+    entry->type = DEAD;
     return fileHandle.writePage(rid.pageNum, buffer);
+}
+
+RC RecordBasedFileManager::deleteRecords(FileHandle &fileHandle) 
+{
+    // Iterate over pages in file and replace each page
+    // with an empty page
+    unsigned char buffer[PAGE_SIZE] = {0};
+    PageIndex* index = getPageIndex(buffer);
+    index->freeMemoryOffset = 0;
+    index->numSlots = 0;
+    unsigned numPages = fileHandle.getNumberOfPages();
+    RC ret = 0;
+    for (unsigned pageNum = 0; pageNum < numPages; pageNum++) {
+        index->pageNum = pageNum;
+        ret = fileHandle.writePage(pageNum, buffer);
+        if (ret != 0)
+            return ret;
+    }
+    return err::OK;
 }
 
 
@@ -305,7 +331,7 @@ RC RecordBasedFileManager::deleteRecord(FileHandle &fileHandle,
             // This record is on this page and should be deleted
             return deleteRID(fileHandle, index, entry, buffer, rid);
         case DEAD:
-            return err::RECORD_DOES_NOT_EXIST;
+            return err::RECORD_DELETED;
         case TOMBSTONE:
             ret = deleteRID(fileHandle, index, entry, buffer, rid);
             if (ret != err::OK) 
@@ -335,11 +361,14 @@ RC RecordBasedFileManager::updateRecord(FileHandle &fileHandle,
         return ret;
 
     PageIndex* index = getPageIndex(buffer);
+    if (rid.slotNum >= index->numSlots) 
+        return err::RECORD_DELETED;
+
     PageIndexEntry* entry = getPageIndexEntry(buffer, rid.slotNum);
 
     // First off, check to make sure that the record is not dead
     if (entry->type == DEAD)
-        return err::RECORD_DOES_NOT_EXIST;
+        return err::RECORD_DELETED;
 
     // Next, check if it is a tombstone. If so, make recursive call
     if (entry->type == TOMBSTONE)
@@ -423,14 +452,123 @@ RC RecordBasedFileManager::readAttribute(FileHandle &fileHandle,
                  const string &attributeName, 
                  void* data)
 {
-    return -1;
+    // Pull the page into memory - O(1)
+    unsigned char buffer[PAGE_SIZE] = {0};
+    RC ret = fileHandle.readPage(rid.pageNum, buffer);
+    if (ret != err::OK)
+    {
+        return ret;
+    }
+
+    // Find the attribute index sought after by the caller
+    int attrIndex = 0; 
+    Attribute attr;
+    for (vector<Attribute>::const_iterator itr = recordDescriptor.begin(); itr != recordDescriptor.end(); itr++)
+    {
+        if (itr->name == attributeName)
+        {
+            attr = *itr;
+            break;
+        }
+        attrIndex++;
+    }
+
+    PageIndexEntry* indexEntry = (PageIndexEntry*)(buffer + PAGE_SIZE - sizeof(PageIndex) - ((rid.slotNum + 1) * sizeof(PageIndexEntry)));
+
+    unsigned char* recBuffer = (unsigned char*)malloc(indexEntry->recordSize);
+    memcpy(recBuffer, buffer + indexEntry->recordOffset, indexEntry->recordSize);
+
+    // Determine the offset of the attribute sought after
+    unsigned offset = 0;
+    memcpy(&offset, recBuffer + (attrIndex * sizeof(unsigned)), sizeof(unsigned));
+
+    // Now read the data into the caller's buffer
+    switch (attr.type)
+    {
+        case TypeInt:
+        case TypeReal:
+            memcpy(data, recBuffer + offset, sizeof(unsigned));
+            break;
+        case TypeVarChar:
+            int dataLen = 0;
+            memcpy(&dataLen, recBuffer + offset, sizeof(unsigned));
+            memcpy(data, &dataLen, sizeof(unsigned));
+            memcpy((char*)data + sizeof(unsigned), recBuffer + offset + sizeof(unsigned), dataLen);
+            break;
+    }
+
+    // Free up the memory
+    free(recBuffer);
+    return err::OK;
 }
 
 RC RecordBasedFileManager::reorganizePage(FileHandle &fileHandle, 
                                           const vector<Attribute> &recordDescriptor, 
                                           const unsigned pageNumber)
 {
-    return -1;
+    unsigned char buffer[PAGE_SIZE] = {0};
+    RC ret = fileHandle.readPage(pageNumber, buffer);
+    if (ret != err::OK)
+        return ret;
+
+    if (pageNumber == 3) {
+        ret = 0;
+    }
+
+    // Get index to determine number of slots
+    PageIndex* index = getPageIndex(buffer);
+    PageIndex newIndex;
+    newIndex.numSlots = index->numSlots;
+    newIndex.pageNum = index->pageNum;
+    newIndex.freeMemoryOffset = index->freeMemoryOffset;
+
+    if (index->numSlots == 0)
+        return err::OK; // Should this be an error?
+
+    // indexEntryList[i] = i^th from the last PageIndexEntry (0^th from last is last)
+    PageIndexEntry* indexEntryList = new PageIndexEntry[index->numSlots];
+    unsigned offset = PAGE_SIZE - sizeof(PageIndex) - (index->numSlots * sizeof(PageIndexEntry));
+    memcpy(indexEntryList, buffer + offset, index->numSlots * sizeof(PageIndexEntry));
+ 
+    // Find first ALIVE index entry
+    int entryIndex;
+    for (entryIndex = index->numSlots - 1; entryIndex >= 0; entryIndex--) {
+        if (indexEntryList[entryIndex].type == ALIVE)
+            break;
+    }
+
+    if (entryIndex == -1) {
+        // All index entries are tombstones or dead.
+        // Therefore, we can reset the freeMemoryOffset to 0, all relevant info
+        // on the page is contained within the slot entry.
+        index->freeMemoryOffset = 0;
+        return fileHandle.writePage(pageNumber, buffer);
+    }
+
+    unsigned char newBuffer[PAGE_SIZE] = {0};
+    offset = 0;
+    for ( ; ; ) {
+        // Copy old record, update its recordOffset
+        memcpy(newBuffer + offset, buffer + indexEntryList[entryIndex].recordOffset, indexEntryList[entryIndex].recordSize);
+        indexEntryList[entryIndex].recordOffset = offset;
+        offset += indexEntryList[entryIndex].recordSize;
+        entryIndex -= 1;
+        while (entryIndex >= 0) {
+            if (indexEntryList[entryIndex].type == ALIVE)
+                break;
+            entryIndex -= 1;
+        }
+        if (entryIndex == -1)
+            break;
+    }
+    // Update freeMemoryOffset for new page
+    newIndex.freeMemoryOffset = offset;
+    writePageIndex(newBuffer, &newIndex);
+    // Copy the updated PageIndexEntry's to new page
+    offset = PAGE_SIZE - sizeof(PageIndex) - (newIndex.numSlots * sizeof(PageIndexEntry));
+    memcpy(newBuffer + offset, indexEntryList, newIndex.numSlots * sizeof(PageIndexEntry));
+    // Finally, write the compacted page to disk
+    return fileHandle.writePage(pageNumber, newBuffer);
 }
 
 // scan returns an iterator to allow the caller to go through the results one by one. 
