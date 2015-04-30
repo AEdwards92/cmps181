@@ -2452,7 +2452,7 @@ RC rbfmTestReorganizeDeleteUpdate(RecordBasedFileManager *rbfm, int skip)
     {
 		memset(record, 0, (PAGE_SIZE / 2) + sizeof(unsigned));
 		rc = rbfm->readRecord(fileHandle, recordDescriptor, rids[i], record);
-		if (rc != err::RECORD_DELETED && rc != err::RECORD_IS_ANCHOR)
+		if (rc != err::RECORD_DELETED)
 		{
 			assert(rc == success);
             cout << "Double checking RID: "<< rids[i].pageNum << ", " << rids[i].slotNum << endl;
@@ -2478,7 +2478,7 @@ RC rbfmTestReorganizeDeleteUpdate(RecordBasedFileManager *rbfm, int skip)
     {
 		memset(record, 0, (PAGE_SIZE / 2) + sizeof(unsigned));
 		rc = rbfm->readRecord(fileHandle, recordDescriptor, rids[i], record);
-		if (rc != err::RECORD_DELETED && rc != err::RECORD_IS_ANCHOR)
+		if (rc != err::RECORD_DELETED)
 		{
 			assert(rc == success);
 			assert(memcmp(record, ridContentList[i], sizes[i]) == 0);
@@ -2653,6 +2653,69 @@ void rbfmTestRandomInsertDeleteUpdateReorganize(int numRecords)
 	rbfm->closeFile(file);
 }
 
+RC scanTest(RecordBasedFileManager *rbfm)
+{
+	// Our assortment of attributes
+	Attribute aInt; 	aInt.name = "aInt";	    aInt.type = TypeInt;		aInt.length = (AttrLength)4;
+	Attribute aFlt;	    aFlt.name = "aFlt"; 	aFlt.type = TypeReal;		aFlt.length = (AttrLength)4;
+    Attribute aVC;      aVC.name = "aVC";        aVC.type = TypeVarChar;    aVC.length = (AttrLength)30;
+    vector<Attribute> recordDescriptor;
+    recordDescriptor.push_back(aFlt); 
+    recordDescriptor.push_back(aInt); 
+
+    vector<string> names;
+    float compFloat = 0.5;
+    int compInt = 100;
+    names.push_back("aFlt");
+
+	std::vector<RID> rids;
+	std::vector<int> sizes;
+
+    string fileName = "scan_test";
+	RC ret = rbfm->createFile(fileName.c_str());
+    assert(ret == 0 && "COULD NOT CREATE FILE");
+    FileHandle fileHandle;
+    ret = rbfm->openFile(fileName.c_str(), fileHandle);
+    assert(ret == 0 && "COULD NOT OPEN FILE");
+
+    RID rid;
+	const int numRecords = 1000;
+    void *record = malloc(100);
+    void *temp_data = malloc(100);
+    void *scan_data = malloc(100);
+	for (int i=0; i<numRecords; ++i) {
+        memset(record, 0, 100);
+        float r = static_cast <float> (rand()) / static_cast <float> (RAND_MAX);
+        int n = rand() % 1000;
+        memcpy(record, &r, sizeof(float));
+        memcpy((char*)record + sizeof(float), &n, sizeof(int));
+        ret = rbfm->insertRecord(fileHandle, recordDescriptor, record, rid);
+        assert(ret == 0 && "COULD NOT INSERT RECORD");
+		ret = rbfm->readAttribute(fileHandle, recordDescriptor, rid, "aFlt", (void*)temp_data);
+        assert(ret == 0 && "COULD NOT READ ATTRIBUTE");
+        assert( *(float*)temp_data == r);
+		ret = rbfm->readAttribute(fileHandle, recordDescriptor, rid, "aInt", (void*)temp_data);
+        assert(ret == 0 && "COULD NOT READ ATTRIBUTE");
+        assert( *(int*)temp_data == n);
+    }
+    RBFM_ScanIterator scan_it;
+    rbfm->scan(fileHandle, recordDescriptor, "aFlt", CompOp::GT_OP, &compFloat, names, scan_it);
+    while (scan_it.getNextRecord(rid, scan_data) != RBFM_EOF) {
+        cout << *((float*)scan_data) << endl;
+    }
+    names.pop_back();
+    names.push_back("aInt");
+    rbfm->scan(fileHandle, recordDescriptor, "aInt", CompOp::LT_OP, &compInt, names, scan_it);
+    while (scan_it.getNextRecord(rid, scan_data) != RBFM_EOF) {
+        cout << *((int*)scan_data) << endl;
+    }
+    ret = rbfm->closeFile(fileHandle);
+    assert(ret == 0 && "COULD NOT CLOSE FILE");
+    free(record);
+    return 0;
+}
+
+
 void cleanup()
 {
 	remove("test");
@@ -2673,6 +2736,7 @@ void cleanup()
     remove("rbfmTestUpdateRecord_file");
     remove("rbfmTestReorganizeDeleteUpdate_file");
 	remove("rbfmTestRandomInsertDeleteUpdateReorganize_file");
+    remove("scan_test");
 }
 
 int main()
@@ -2700,7 +2764,7 @@ int main()
     RBFTest_11(rbfm, rids, sizes);
     rbfmTestReadAttribute(rbfm, rids, sizes);
     rbfmTestRandomInsertDeleteUpdateReorganize(49);
-	
+    
     // Test the update record by varying how many records are upgraded each time
     for (int i = UPDATE_MIN_SKIP; i <= UPDATE_MAX_SKIP; i++)
     {
@@ -2722,9 +2786,11 @@ int main()
     }
 
     // Finishing up
-    pfmTest();
+    //pfmTest();
     fhTest();
     rbfmTest();
+    scanTest(rbfm);
+
 
     cleanup();
 
@@ -2733,3 +2799,4 @@ int main()
     delete reinterpret_cast<DeletableRBFM*>(RecordBasedFileManager::instance());
     return 0;
 }
+

@@ -1,6 +1,5 @@
 #include "rbfm.h"
 #include "../util/errcodes.h"
-#include <cstdlib>
 #include <iostream>
 
 RecordBasedFileManager* RecordBasedFileManager::_rbf_manager = 0;
@@ -261,6 +260,7 @@ RC RecordBasedFileManager::readRecord(FileHandle &fileHandle,
     switch (entry->type)
     {
         case ALIVE: 
+        case ANCHOR: 
             {
             int fieldOffset = recordDescriptor.size() * sizeof(unsigned);
             memcpy(data, buffer + entry->recordOffset + fieldOffset, entry->recordSize - fieldOffset);
@@ -269,7 +269,7 @@ RC RecordBasedFileManager::readRecord(FileHandle &fileHandle,
         case DEAD:
             return err::RECORD_DELETED;
         case TOMBSTONE:
-            return readRecord(fileHandle, recordDescriptor, entry->tombStoneRID, data);
+            return readRecord(fileHandle, recordDescriptor, entry->tombstoneRID, data);
     }
 }
 
@@ -328,6 +328,7 @@ RC RecordBasedFileManager::deleteRecord(FileHandle &fileHandle,
     switch (entry->type)
     {
         case ALIVE: 
+        case ANCHOR: 
             // This record is on this page and should be deleted
             return deleteRID(fileHandle, index, entry, buffer, rid);
         case DEAD:
@@ -336,7 +337,7 @@ RC RecordBasedFileManager::deleteRecord(FileHandle &fileHandle,
             ret = deleteRID(fileHandle, index, entry, buffer, rid);
             if (ret != err::OK) 
                 return ret;
-            return deleteRecord(fileHandle, recordDescriptor, entry->tombStoneRID);
+            return deleteRecord(fileHandle, recordDescriptor, entry->tombstoneRID);
     }
 
 }
@@ -372,7 +373,7 @@ RC RecordBasedFileManager::updateRecord(FileHandle &fileHandle,
 
     // Next, check if it is a tombstone. If so, make recursive call
     if (entry->type == TOMBSTONE)
-        return updateRecord(fileHandle, recordDescriptor, data, entry->tombStoneRID);
+        return updateRecord(fileHandle, recordDescriptor, data, entry->tombstoneRID);
 
     // Otherwise, check if we can update in place
     if (rid.slotNum == index->numSlots - 1) {
@@ -422,7 +423,7 @@ RC RecordBasedFileManager::updateRecord(FileHandle &fileHandle,
 
     // Prepare a new index entry to prepend to the list of entries
     PageIndexEntry newEntry;
-    newEntry.type = ALIVE;
+    newEntry.type = ANCHOR;
     newEntry.recordSize = recLength;
     newEntry.recordOffset = newIndex->freeMemoryOffset;
     
@@ -440,8 +441,8 @@ RC RecordBasedFileManager::updateRecord(FileHandle &fileHandle,
 
     // After writing, update entry to be a tombstone
     entry->type = TOMBSTONE;
-    entry->tombStoneRID.pageNum = pageNum;
-    entry->tombStoneRID.slotNum = newIndex->numSlots - 1;
+    entry->tombstoneRID.pageNum = pageNum;
+    entry->tombstoneRID.slotNum = newIndex->numSlots - 1;
 
     return fileHandle.writePage(rid.pageNum, buffer);
 }
@@ -533,7 +534,7 @@ RC RecordBasedFileManager::reorganizePage(FileHandle &fileHandle,
     // Find first ALIVE index entry
     int entryIndex;
     for (entryIndex = index->numSlots - 1; entryIndex >= 0; entryIndex--) {
-        if (indexEntryList[entryIndex].type == ALIVE)
+        if (indexEntryList[entryIndex].type == ALIVE || indexEntryList[entryIndex].type == ANCHOR)
             break;
     }
 
@@ -554,7 +555,7 @@ RC RecordBasedFileManager::reorganizePage(FileHandle &fileHandle,
         offset += indexEntryList[entryIndex].recordSize;
         entryIndex -= 1;
         while (entryIndex >= 0) {
-            if (indexEntryList[entryIndex].type == ALIVE)
+            if (indexEntryList[entryIndex].type == ALIVE || indexEntryList[entryIndex].type == ANCHOR)
                 break;
             entryIndex -= 1;
         }
@@ -580,7 +581,7 @@ RC RecordBasedFileManager::scan(FileHandle &fileHandle,
                                 const vector<string> &attributeNames, // a list of projected attributes
                                 RBFM_ScanIterator &rbfm_ScanIterator)
 {
-    return -1;
+    return rbfm_ScanIterator.init(fileHandle, recordDescriptor, conditionAttribute, compOp, value, attributeNames);
 }
 
 RC RecordBasedFileManager::reorganizeFile(FileHandle &fileHandle, 
@@ -654,3 +655,244 @@ unsigned Attribute::size(AttrType type, const void* value)
             return 0;
     }
 }
+
+RC RBFM_ScanIterator::close()
+{
+     free(_compValue);
+     _compValue = NULL;
+     _fileHandle = NULL;
+     _compIndex = -1;
+     _returnAttrIndices.clear();
+     _returnAttrTypes.clear();
+   
+     return err::OK;
+}
+
+RC RBFM_ScanIterator::init(FileHandle& fileHandle, 
+                           const vector<Attribute> &recordDescriptor,
+                           const string &conditionAttribute,
+                           const CompOp compOp,
+                           const void* value,
+                           const vector<string> &attributeNames)
+{
+	RC ret = err::OK;
+    _fileHandle = &fileHandle;
+    _recordDescriptor = recordDescriptor;
+	_compOp = compOp;
+	_nextRID.pageNum = 0;
+	_nextRID.slotNum = 0;
+	
+	if (compOp != NO_OP) {
+		ret = lookupAttr(conditionAttribute, _compIndex);
+		if (ret != err::OK) 
+			return ret;
+		_compType = _recordDescriptor[_compIndex].type;
+		copyCompValue(_compType, value);
+	}
+
+	_returnAttrTypes.clear();
+	_returnAttrIndices.clear();
+	for (auto it = attributeNames.begin(); it != attributeNames.end(); ++it) {
+		unsigned index;
+		ret = lookupAttr(*it, index);
+		if (ret != err::OK)
+			return ret;
+
+		_returnAttrTypes.push_back(_recordDescriptor[index].type);
+		_returnAttrIndices.push_back(index);
+	}
+
+	return err::OK;
+}
+
+RC RBFM_ScanIterator::getNextRecord(RID& rid, 
+                                    void* data)
+{
+    unsigned numPages = _fileHandle->getNumberOfPages();
+    if (_nextRID.pageNum >= numPages)
+        return RBFM_EOF;
+
+    char buffer[PAGE_SIZE] = {0};
+    RC ret = _fileHandle->readPage(_nextRID.pageNum, buffer);
+    if (ret != err::OK)
+        return ret;
+
+    PageIndex* index = RecordBasedFileManager::getPageIndex(buffer);
+
+    unsigned currentNumSlots = index->numSlots;
+    PageNum currentPage = _nextRID.pageNum;
+    while (_nextRID.pageNum < numPages) {
+        if (_nextRID.pageNum != currentPage) {
+            currentPage = _nextRID.pageNum;
+            RC ret = _fileHandle->readPage(_nextRID.pageNum, buffer);
+            if (ret != err::OK)
+                return ret;
+            currentNumSlots = index->numSlots;
+        }
+        if (_nextRID.slotNum >= currentNumSlots) {
+            updateNextRecord(currentNumSlots);
+            continue;
+        }
+        // To avoid duplicate return values, and so RID's stay consistent, only check ALIVE
+        // and TOMBSTONE records. If it is a TOMBSTONE then we must load buffer with the page
+        // containing the actual record data
+        PageIndexEntry* entry = RecordBasedFileManager::getPageIndexEntry(buffer, _nextRID.slotNum);
+        switch (entry->type) {
+            case DEAD:
+            case ANCHOR:
+                updateNextRecord(currentNumSlots);
+                continue;
+            case TOMBSTONE: {
+                RID newRID;
+                while (entry->type == TOMBSTONE) {
+                    newRID = entry->tombstoneRID;
+                    ret = _fileHandle->readPage(newRID.pageNum, buffer);
+                    currentPage = newRID.pageNum;
+                    if (ret != err::OK)
+                        return ret;
+                    entry = RecordBasedFileManager::getPageIndexEntry(buffer, newRID.slotNum);
+                }
+            }
+            default: 
+                break;
+        }
+        // Now entry points to an entry whose physical data is on buffer
+        // We are ready to test the scan condition
+        if (not testScan(buffer + entry->recordOffset)) {
+            updateNextRecord(currentNumSlots);
+            continue;
+        }
+        // If we are here, then we passed. Copy the desired attributes to the user buffer
+        rid = _nextRID;
+        copyRecord((char*) data, buffer + entry->recordOffset);
+        updateNextRecord(currentNumSlots);
+        return err::OK;
+    }
+    return RBFM_EOF;
+}
+
+RC RBFM_ScanIterator::lookupAttr(const string& conditionAttribute,
+                                 unsigned& index)
+{
+    index = 0;
+    for (auto it = _recordDescriptor.begin(); it != _recordDescriptor.end(); it++)
+    {
+        if (it->name == conditionAttribute) 
+            return err::OK;
+
+        index++;
+    }
+    return err::ATTRIBUTE_NOT_FOUND;
+}
+
+RC RBFM_ScanIterator::copyCompValue(AttrType attrType, 
+                                    const void* value)
+{
+    free(_compValue);
+    unsigned attrSize = Attribute::size(attrType, value);
+    _compValue = malloc(attrSize);
+    if (not _compValue)
+        return err::OUT_OF_MEMORY;
+    memcpy(_compValue, value, attrSize);
+    return err::OK;
+}
+
+bool RBFM_ScanIterator::testScan(const void* recData)
+{
+    if (_compOp == NO_OP)
+        return true;
+
+    unsigned* offsets = (unsigned*)recData;
+    float floatVal;
+    int intVal;
+
+    switch (_compType)
+    {
+        case TypeInt:
+            intVal = *(int*) ((char *)recData + offsets[_compIndex]);
+            return doComp(_compOp, &intVal, (int*) _compValue);
+        case TypeReal:
+            floatVal = *(float*) ((char *)recData + offsets[_compIndex]);
+            return doComp(_compOp, &floatVal, (float*) _compValue);
+        case TypeVarChar:
+            void* attrData = (unsigned*) recData + offsets[_compIndex] + sizeof(unsigned);
+            void* compStr = (unsigned*) _compValue + sizeof(unsigned);
+            return doComp(_compOp, (char*) attrData, (char*) compStr);
+    }
+    return false;
+}
+
+bool RBFM_ScanIterator::doComp(const CompOp compOp, const int* attrData, const int* value)
+{
+    switch (compOp) {
+        case NO_OP: return true;
+        case EQ_OP: return *attrData == *value;
+        case LT_OP: return *attrData <  *value; 
+        case GT_OP: return *attrData >  *value; 
+        case LE_OP: return *attrData <= *value; 
+        case GE_OP: return *attrData >= *value; 
+        case NE_OP: return *attrData != *value; 
+    }
+    return false;
+}
+
+bool RBFM_ScanIterator::doComp(const CompOp compOp, const float* attrData, const float* value)
+{
+    switch (compOp) {
+        case NO_OP: return true;
+        case EQ_OP: return *attrData == *value;
+        case LT_OP: return *attrData <  *value; 
+        case GT_OP: return *attrData >  *value; 
+        case LE_OP: return *attrData <= *value; 
+        case GE_OP: return *attrData >= *value; 
+        case NE_OP: return *attrData != *value; 
+    }
+    return false;
+}
+
+bool RBFM_ScanIterator::doComp(const CompOp compOp, const char* attrData, const char* value)
+{
+    int strComp = strcmp(attrData, value);
+    switch (compOp) {
+        case NO_OP: return true;
+        case EQ_OP: return strComp == 0;
+        case LT_OP: return strComp <  0; 
+        case GT_OP: return strComp >  0; 
+        case LE_OP: return strComp <= 0; 
+        case GE_OP: return strComp >= 0; 
+        case NE_OP: return strComp != 0; 
+    }
+    return false;
+}
+
+RC RBFM_ScanIterator::updateNextRecord(unsigned numSlots)
+{
+	_nextRID.slotNum++;
+	if (_nextRID.slotNum >= numSlots) {
+		_nextRID.pageNum++;
+		_nextRID.slotNum = 0;
+	}
+    return err::OK;
+}
+
+RC RBFM_ScanIterator::copyRecord(char* dest, 
+                                 const char* src)
+{
+	// The offset array is just after the number of attributes
+	unsigned* offsets = (unsigned*)((char*)src);
+	unsigned dataOffset = 0;
+
+	// Iterate through all of the columns we actually want to copy for the user
+	for (unsigned i = 0; i < _returnAttrIndices.size(); ++i) {
+		unsigned attrIndex = _returnAttrIndices[i];
+		unsigned recordOffset = offsets[attrIndex];
+		unsigned attributeSize = Attribute::size(_returnAttrTypes[i], src + recordOffset);
+
+		// Copy the data and then move forward in the user's buffer
+		memcpy(dest + dataOffset, src + recordOffset, attributeSize);
+		dataOffset += attributeSize;
+	}
+    return err::OK;
+}
+
+

@@ -32,7 +32,7 @@ namespace err
             case RECORD_DELETED:                        return "RECORD_IS_DELETED";
             case PAGE_CANNOT_BE_ORGANIZED:              return "PAGE_CANNOT_BE_ORGANIZED";
             case TABLE_NOT_FOUND:                       return "TABLE_NOT_FOUND";
-            case TABLE_ALREADY_CREATED;                 return "TABLE_ALREADY_CREATED";
+            case TABLE_ALREADY_CREATED:                 return "TABLE_ALREADY_CREATED";
             case TABLE_NAME_TOO_LONG:                   return "TABLE_NAME_TOO_LONG";
             case ATTRIBUTE_INVALID_TYPE:                return "ATTRIBUTE_INVALID_TYPE";
             case OUT_OF_MEMORY:                         return "OUT_OF_MEMORY";
