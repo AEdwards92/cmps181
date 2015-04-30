@@ -2653,19 +2653,33 @@ void rbfmTestRandomInsertDeleteUpdateReorganize(int numRecords)
 	rbfm->closeFile(file);
 }
 
+string randomString(unsigned len) {
+    string retVal = "";
+    for (unsigned i = 0; i < len; i++) {
+        retVal.push_back((char)((rand() % (26)) + 'a'));
+    }
+    return retVal;
+}
+
 RC scanTest(RecordBasedFileManager *rbfm)
 {
 	// Our assortment of attributes
 	Attribute aInt; 	aInt.name = "aInt";	    aInt.type = TypeInt;		aInt.length = (AttrLength)4;
 	Attribute aFlt;	    aFlt.name = "aFlt"; 	aFlt.type = TypeReal;		aFlt.length = (AttrLength)4;
-    Attribute aVC;      aVC.name = "aVC";        aVC.type = TypeVarChar;    aVC.length = (AttrLength)30;
+    Attribute aStr;     aStr.name = "aStr";     aStr.type = TypeVarChar;    aStr.length = (AttrLength)10 + 1;
     vector<Attribute> recordDescriptor;
     recordDescriptor.push_back(aFlt); 
     recordDescriptor.push_back(aInt); 
+    recordDescriptor.push_back(aStr); 
 
     vector<string> names;
-    float compFloat = 0.5;
+    float compFloat = 0.1;
     int compInt = 100;
+    const char* compStrData = "hhhsizipsi";
+    unsigned len = 11;
+    char compStr[20];
+    memcpy(compStr, &len, sizeof(unsigned));
+    memcpy(compStr + sizeof(unsigned), compStrData, len);
     names.push_back("aFlt");
 
 	std::vector<RID> rids;
@@ -2680,15 +2694,18 @@ RC scanTest(RecordBasedFileManager *rbfm)
 
     RID rid;
 	const int numRecords = 1000;
-    void *record = malloc(100);
-    void *temp_data = malloc(100);
-    void *scan_data = malloc(100);
+    void *record = malloc(200);
+    void *temp_data = malloc(200);
+    void *scan_data = malloc(200);
 	for (int i=0; i<numRecords; ++i) {
-        memset(record, 0, 100);
+        memset(record, 0, 200);
         float r = static_cast <float> (rand()) / static_cast <float> (RAND_MAX);
         int n = rand() % 1000;
+        string s = randomString(10);
         memcpy(record, &r, sizeof(float));
         memcpy((char*)record + sizeof(float), &n, sizeof(int));
+        memcpy((char*)record + sizeof(float) + sizeof(int), &len, sizeof(unsigned));
+        memcpy((char*)record + sizeof(float) + sizeof(int) + sizeof(unsigned), s.c_str(), len);
         ret = rbfm->insertRecord(fileHandle, recordDescriptor, record, rid);
         assert(ret == 0 && "COULD NOT INSERT RECORD");
 		ret = rbfm->readAttribute(fileHandle, recordDescriptor, rid, "aFlt", (void*)temp_data);
@@ -2697,17 +2714,27 @@ RC scanTest(RecordBasedFileManager *rbfm)
 		ret = rbfm->readAttribute(fileHandle, recordDescriptor, rid, "aInt", (void*)temp_data);
         assert(ret == 0 && "COULD NOT READ ATTRIBUTE");
         assert( *(int*)temp_data == n);
+		ret = rbfm->readAttribute(fileHandle, recordDescriptor, rid, "aStr", (void*)temp_data);
+        assert(ret == 0 && "COULD NOT READ ATTRIBUTE");
+        assert( strcmp((char*)temp_data + sizeof(int), s.c_str()) == 0 );
+        cout << s.c_str()<< endl;
     }
     RBFM_ScanIterator scan_it;
-    rbfm->scan(fileHandle, recordDescriptor, "aFlt", CompOp::GT_OP, &compFloat, names, scan_it);
+    rbfm->scan(fileHandle, recordDescriptor, "aFlt", CompOp::LT_OP, &compFloat, names, scan_it);
     while (scan_it.getNextRecord(rid, scan_data) != RBFM_EOF) {
         cout << *((float*)scan_data) << endl;
     }
     names.pop_back();
     names.push_back("aInt");
-    rbfm->scan(fileHandle, recordDescriptor, "aInt", CompOp::LT_OP, &compInt, names, scan_it);
+    rbfm->scan(fileHandle, recordDescriptor, "aInt", CompOp::EQ_OP, &compInt, names, scan_it);
     while (scan_it.getNextRecord(rid, scan_data) != RBFM_EOF) {
         cout << *((int*)scan_data) << endl;
+    }
+    names.pop_back();
+    names.push_back("aStr");
+    rbfm->scan(fileHandle, recordDescriptor, "aStr", CompOp::GT_OP, compStr, names, scan_it);
+    while (scan_it.getNextRecord(rid, scan_data) != RBFM_EOF) {
+        cout << ((char*)scan_data + sizeof(int)) << endl;
     }
     ret = rbfm->closeFile(fileHandle);
     assert(ret == 0 && "COULD NOT CLOSE FILE");

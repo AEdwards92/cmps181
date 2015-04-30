@@ -815,8 +815,8 @@ bool RBFM_ScanIterator::testScan(const void* recData)
             floatVal = *(float*) ((char *)recData + offsets[_compIndex]);
             return doComp(_compOp, &floatVal, (float*) _compValue);
         case TypeVarChar:
-            void* attrData = (unsigned*) recData + offsets[_compIndex] + sizeof(unsigned);
-            void* compStr = (unsigned*) _compValue + sizeof(unsigned);
+            void* attrData = (char*)recData + (offsets[_compIndex] + sizeof(unsigned));
+            void* compStr = (char*)_compValue + sizeof(unsigned);
             return doComp(_compOp, (char*) attrData, (char*) compStr);
     }
     return false;
