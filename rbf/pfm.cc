@@ -2,6 +2,7 @@
 #include "../util/errcodes.h"
 
 #include <cstdio>
+#include <cstring>
 #include <sys/stat.h>
 
 //////////////////////////////////

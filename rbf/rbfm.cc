@@ -1,6 +1,7 @@
 #include "rbfm.h"
 #include "../util/errcodes.h"
 #include <iostream>
+#include <cstring>
 
 RecordBasedFileManager* RecordBasedFileManager::_rbf_manager = 0;
 

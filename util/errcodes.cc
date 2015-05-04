@@ -35,6 +35,9 @@ namespace err
             case TABLE_ALREADY_CREATED:                 return "TABLE_ALREADY_CREATED";
             case TABLE_NAME_TOO_LONG:                   return "TABLE_NAME_TOO_LONG";
             case ATTRIBUTE_INVALID_TYPE:                return "ATTRIBUTE_INVALID_TYPE";
+            case ATTRIBUTE_NOT_FOUND:                   return "ATTRIBUTE_NOT_FOUND";
+            case ATTRIBUTE_NAME_TOO_LONG:               return "ATTRIBUTE_NAME_TOO_LONG";
+            case ATTRIBUTE_COUNT_MISMATCH:              return "ATTRIBUTE_COUNT_MISMATCH";
             case OUT_OF_MEMORY:                         return "OUT_OF_MEMORY";
         }
 

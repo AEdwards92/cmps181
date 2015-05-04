@@ -4,23 +4,37 @@
 
 #include <string>
 #include <vector>
+#include <map>
+#include <sys/stat.h>
 
 #include "../rbf/rbfm.h"
 
 using namespace std;
 
 
+# define MAX_TABLE_RECORD_SIZE 768
+# define MAX_COLUMNS_RECORD_SIZE 784
 # define RM_EOF (-1)  // end of a scan operator
 
 // RM_ScanIterator is an iteratr to go through tuples
 class RM_ScanIterator {
 public:
-  RM_ScanIterator() {};
-  ~RM_ScanIterator() {};
+  RM_ScanIterator();
+  ~RM_ScanIterator();
+
+  FileHandle fileHandle;
+
+  RC initialize(const vector<Attribute> &recordDescriptor, const CompOp compOp, const void *value,
+              const vector<string> &attributeNames, const string &conditionAttribute);
 
   // "data" follows the same format as RelationManager::insertTuple()
-  RC getNextTuple(RID &rid, void *data) { return RM_EOF; };
-  RC close() { return -1; };
+  RC getNextTuple(RID &rid, void *data);
+  RC close();
+
+private:
+    RBFM_ScanIterator rbfm_scanner;
+    RecordBasedFileManager *rbfm;
+
 };
 
 
@@ -76,6 +90,38 @@ protected:
 
 private:
   static RelationManager *_rm;
+
+  RecordBasedFileManager * rbfm;
+  RBFM_ScanIterator rbfmScanner;
+  vector<Attribute> tableVec;
+  vector<Attribute> columnVec;
+
+  map<string, map<int, RID> *> tablesMap;
+
+  map<int, map<int, RID> *> columnsMap;
+
+  int TABLE_ID_COUNTER;
+
+
+
+  void appendData(int fieldLength, int &offset, char * pageBuffer, const char * dataToWrite, AttrType attrType);
+
+
+  RC insertTablesEntry(string tableName, string tableType, string fileName, FileHandle &fileHandle, int numOfCol, RID &rid);
+  RC insertColumnsEntry(string tableName, string columnName, FileHandle &fileHandle, int colPosition, int maxLength, RID &rid, AttrType colType);
+
+  short determineMemoryNeeded(const vector<Attribute> &attributes);
+
+  void populateColumnsMap(RID &rid, int columnIndex);
+
+  RC loadSystem();
+
+  RC createTable(const string &tableName, const vector<Attribute> & attr, const string & type);
+
+  bool isSystemTableRequest(string tableName);
+  bool fexist(string filename);
+
+
 };
 
 #endif
