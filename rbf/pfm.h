@@ -75,7 +75,7 @@ class FileHandle {
     RC loadFile(FILE* file);
     RC unloadFile();
     RC updatePageCounter();
-
+    string getFileName() { return fileName; }
     bool operator== (const FileHandle& that) const { 
                         return this->_file == that._file; }
 

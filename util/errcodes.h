@@ -1,6 +1,10 @@
 #ifndef _errcodes_h_
 #define _errcodes_h_
 
+#include <iostream>
+
+#define RETURN_ON_ERR(ret) {if((ret) != err::OK) {cerr << err::errToString(ret) << endl;  return ret;}}
+
 namespace err {
     enum ErrorCode {
         UNKNOWN_FAILURE = -1,
@@ -44,6 +48,8 @@ namespace err {
         ATTRIBUTE_NOT_FOUND,
         ATTRIBUTE_NAME_TOO_LONG,
         ATTRIBUTE_COUNT_MISMATCH,
+
+        INDEX_FILE_EXISTS,
 
         OUT_OF_MEMORY
     };

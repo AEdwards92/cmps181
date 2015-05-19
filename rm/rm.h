@@ -102,10 +102,7 @@ private:
 
   int TABLE_ID_COUNTER;
 
-
-
   void appendData(int fieldLength, int &offset, char * pageBuffer, const char * dataToWrite, AttrType attrType);
-
 
   RC insertTablesEntry(string tableName, string tableType, string fileName, FileHandle &fileHandle, int numOfCol, RID &rid);
   RC insertColumnsEntry(string tableName, string columnName, FileHandle &fileHandle, int colPosition, int maxLength, RID &rid, AttrType colType);
@@ -120,8 +117,6 @@ private:
 
   bool isSystemTableRequest(string tableName);
   bool fexist(string filename);
-
-
 };
 
 #endif
