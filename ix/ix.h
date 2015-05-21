@@ -14,7 +14,7 @@ class IX_ScanIterator;
 
 struct KeyData {
     AttrType type;
-    int size;
+    int size; // size in bytes of the physical data, NOT of this struct
     union {
         int integer;
         float real;
@@ -25,12 +25,13 @@ struct KeyData {
 
 struct IndexRecord {
     KeyData key;
-    RID nextSlot;
     RID rid;
+    RID nextSlot;
 };
 
 struct IndexFileHeader {
     PageNum root; // location of root page
+    AttrType type;
     // Leave possibility for more bookkeeping later
 };
 
@@ -58,7 +59,7 @@ struct IndexSlot {
 //  getFooter(pageBuffer)
 //      Return pointer to footer of the pageBuffer
 //
-//  findLeafPage(fileHandle, KeyData, pageNum)
+//  loadLeafPage(fileHandle, KeyData, pageNum)
 //      Update pageNum to the page number of the leaf page
 //      where the key belongs. This may need some helper 
 //      functions.
@@ -104,18 +105,30 @@ class IndexManager {
         // Get footer
         IndexPageFooter* getIXFooter(const void* buffer);
 
+        // Write slot
+        void writeIXSlot(void* buffer, unsigned slotNum, IndexSlot* slot);
+
         // Get slot
         IndexSlot* getIXSlot(const int slotNum, const void* buffer);
 
         // Load IX record into a struct
-        RC loadIXRecord(unsigned size, unsigned offset, void* buffer, IndexRecord &record);
+        RC loadIXRecord(unsigned size, unsigned offset, void* buffer, AttrType type, IndexRecord &record);
 
         // Load buffer with the root page
         // Assumes fileHandle is active
         RC loadRootPage(FileHandle &fileHandle, void* buffer);
 
+        RC loadKeyData(const void* data, AttrType type, KeyData& key);
+
         // Find the appropriate leafPage for a key to be inserted
-        RC findLeafPage(FileHandle &fileHandle, KeyData &key, PageNum &pageNum);
+        RC loadLeafPage(FileHandle &fileHandle, KeyData &key, AttrType type, vector<PageNum> parents, unsigned char* buffer);
+
+        bool needsToSplit (KeyData& key, IndexPageFooter* footer);
+
+        RC splitHandler(FileHandle& fileHandle, vector<PageNum> parents, unsigned char* buffer);
+        RC writeRecordToBuffer(KeyData& key, const RID& rid, const RID& nextSlot, AttrType type, IndexPageFooter* footer, unsigned char* buffer);
+
+        RC insertInOrder(KeyData& key, AttrType type, const RID &rid, unsigned char* buffer);
 
         // The following two functions are using the following format for the passed key value.
         //  1) data is a concatenation of values of the attributes
