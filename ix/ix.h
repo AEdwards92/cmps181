@@ -14,7 +14,7 @@ class IX_ScanIterator;
 
 struct KeyData {
     AttrType type;
-    int size; // size in bytes of the physical data, NOT of this struct
+    unsigned size; // size in bytes of the physical data, NOT of this struct
     union {
         int integer;
         float real;
@@ -27,6 +27,8 @@ struct IndexRecord {
     KeyData key;
     RID rid;
     RID nextSlot;
+    IndexRecord() = default;
+    IndexRecord(const IndexRecord& that);
 };
 
 struct IndexFileHeader {
@@ -90,9 +92,19 @@ class IndexManager {
         static IndexManager* instance();
 
         RC newPage(FileHandle &fileHandle,
-                   const PageNum pageNum, 
                    const bool isLeaf,
                    const PageNum num);
+
+        RC initPage(FileHandle &fileHandle,
+                   const PageNum pageNum, 
+                   const bool isLeaf,
+                   const PageNum num,
+                   unsigned char* buffer);
+
+        RC newRootPage(FileHandle &fileHandle,
+                       const PageNum num,
+                       AttrType type,
+                       IndexRecord& divider);
 
         RC createFile(const string &fileName);
 
@@ -112,7 +124,9 @@ class IndexManager {
         IndexSlot* getIXSlot(const int slotNum, const void* buffer);
 
         // Load IX record into a struct
-        RC loadIXRecord(unsigned size, unsigned offset, void* buffer, AttrType type, IndexRecord &record);
+        RC loadIXRecord(unsigned size, unsigned offset, unsigned char* buffer, AttrType type, IndexRecord &record);
+
+        PageNum rootPageNum(FileHandle &fileHandle);
 
         // Load buffer with the root page
         // Assumes fileHandle is active
@@ -120,12 +134,13 @@ class IndexManager {
 
         RC loadKeyData(const void* data, AttrType type, KeyData& key);
 
+        RC loadHighestKey(FileHandle& fileHandle, AttrType type, KeyData& key);
         // Find the appropriate leafPage for a key to be inserted
-        RC loadLeafPage(FileHandle &fileHandle, KeyData &key, AttrType type, vector<PageNum> parents, unsigned char* buffer);
+        RC loadLeafPage(FileHandle &fileHandle, KeyData &key, AttrType type, vector<PageNum>& parents, unsigned char* buffer);
 
         bool needsToSplit (KeyData& key, IndexPageFooter* footer);
 
-        RC splitHandler(FileHandle& fileHandle, vector<PageNum> parents, unsigned char* buffer);
+        RC splitHandler(FileHandle& fileHandle, vector<PageNum>& parents, const AttrType type, KeyData key, RID rid, unsigned char* buffer);
         RC writeRecordToBuffer(KeyData& key, const RID& rid, const RID& nextSlot, AttrType type, IndexPageFooter* footer, unsigned char* buffer);
 
         RC insertInOrder(KeyData& key, AttrType type, const RID &rid, unsigned char* buffer);
@@ -168,7 +183,34 @@ class IX_ScanIterator {
         ~IX_ScanIterator(); 							// Destructor
 
         RC getNextEntry(RID &rid, void *key);  		// Get next matching entry
+        RC init(FileHandle &fileHandle,
+                const Attribute &attribute,
+                const void *lowKey,
+                const void *highKey,
+                bool lowKeyInclusive,
+                bool highKeyInclusive);
         RC close();             						// Terminate index scan
+    private:
+        IndexManager* _ixfm;
+        FileHandle _fileHandle;
+        AttrType _type;
+        KeyData _lowKey;
+        KeyData _highKey;
+        bool _lowInclusive;
+        bool _highInclusive;
+        unsigned char _buffer[PAGE_SIZE] = {0};
+        IndexPageFooter* _footer;
+
+        bool _eof;
+
+        IndexSlot* _nextSlot;
+        IndexRecord _nextRecord;
+        IndexRecord _highestRecord;
+
+        RC loadFirstRecord(); 
+        RC loadNextRecord();
+        RC loadLowestRecord();
+        RC loadHighestRecord();
 };
 
 // print out the error message for a given return code

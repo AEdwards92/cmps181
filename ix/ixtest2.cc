@@ -1,4 +1,5 @@
 #include <iostream>
+#include "../util/errcodes.h"
 
 #include <cstdlib>
 #include <cstdio>
@@ -544,6 +545,7 @@ int testCase_7(const string &indexFileName, const Attribute &attribute)
         if(rc != success)
         {
             cout << "Failed deleting entry in Scan..." << endl;
+            cout << err::errToString(rc) << endl;
             goto error_close_scan;
         }
     }
@@ -930,10 +932,14 @@ int testCase_9(const string &indexFileName, const Attribute &attribute)
             cout << rid.pageNum << " " << rid.slotNum << endl;
 
         key = A[rid.pageNum-1];
+        if (key == 13800)
+            cout << endl;
         rc = indexManager->deleteEntry(fileHandle, attribute, &key, rid);
         if(rc != success)
         {
             cout << "Failed deleting entry in Scan..." << endl;
+            cout << "key: " << key << endl;
+            cout << "rid: " << "<" << rid.pageNum << ", " << rid.slotNum << ">" << endl;
             goto error_close_scan;
         }
         count++;
@@ -1777,11 +1783,11 @@ void test()
     testCase_10(indexHeightFileName, attrHeight);
 
     // Extra Credit Work
-    // Duplicat Entries
-    testCase_extra_1(indexAgeFileName, attrAge);
-    testCase_extra_2(indexAgeFileName, attrAge);
-    // TypeVarChar - mandatory for graduate students
-    testCase_extra_3(indexEmpNameFileName, attrEmpName);
+    //// Duplicat Entries
+    //testCase_extra_1(indexAgeFileName, attrAge);
+    //testCase_extra_2(indexAgeFileName, attrAge);
+    //// TypeVarChar - mandatory for graduate students
+    //testCase_extra_3(indexEmpNameFileName, attrEmpName);
     return;
 }
 
