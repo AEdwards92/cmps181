@@ -903,6 +903,8 @@ int testCase_9(const string &indexFileName, const Attribute &attribute)
         rid.pageNum = i+1;
         rid.slotNum = i+1;
 
+        if (key == 414)
+            cout << "" ;
         rc = indexManager->insertEntry(fileHandle, attribute, &key, rid);
         if(rc != success)
         {

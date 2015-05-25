@@ -21,6 +21,7 @@ struct KeyData {
         char varchar[sizeof(unsigned) + MAX_VARCHAR_SIZE];
     };
     int compare(KeyData&);// TODO
+    string toString();
 };
 
 struct IndexRecord {

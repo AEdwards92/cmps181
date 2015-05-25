@@ -1,6 +1,7 @@
 
 #include "ix.h"
 #include "../util/errcodes.h"
+#include <string>
 
 // copy constructor
 IndexRecord::IndexRecord(const IndexRecord& that) {
@@ -412,9 +413,13 @@ RC IndexManager::splitHandler(FileHandle& fileHandle,
         linkRID.pageNum = fileHandle.getNumberOfPages();
         linkRID.slotNum = 0;
         IndexPageFooter *lowerFooter = getIXFooter(lowerHalf);
-        slot = getIXSlot(lowerFooter->numSlots - 1, lowerHalf);
-        memcpy(lowerHalf + slot->recordOffset + slot->recordSize - sizeof(RID), &linkRID, sizeof(RID));
+        slot = getIXSlot(lowerFooter->firstRID.slotNum, lowerHalf);
         ret  = loadIXRecord(slot->recordSize, slot->recordOffset, lowerHalf, type, record);
+        while (record.nextSlot.pageNum == lowerFooter->pageNum) {
+            slot = getIXSlot(record.nextSlot.slotNum, lowerHalf);
+            ret  = loadIXRecord(slot->recordSize, slot->recordOffset, lowerHalf, type, record);
+        }
+        memcpy(lowerHalf + slot->recordOffset + slot->recordSize - sizeof(RID), &linkRID, sizeof(RID));
         RETURN_ON_ERR(ret);
     }
 
@@ -489,13 +494,15 @@ RC IndexManager::writeRecordToBuffer(KeyData& key,
 
 RC IndexManager::insertInOrder(KeyData& key, AttrType type, const RID &rid, unsigned char* buffer) 
 {
+    if (type == TypeInt && key.integer == 4946)
+        cout <<"";
+    
     // recover footer from page, locate first slot w.r.t. key order
     IndexPageFooter* footer = getIXFooter(buffer);
     IndexSlot* currSlot = getIXSlot(footer->firstRID.slotNum, buffer);
     IndexSlot* prevSlot;
     IndexRecord record;
     RID currRID = footer->firstRID;
-    RID prevRID;
 
     IndexSlot newSlot;
     newSlot.type = ALIVE;
@@ -516,6 +523,9 @@ RC IndexManager::insertInOrder(KeyData& key, AttrType type, const RID &rid, unsi
         writeIXSlot(buffer, newRID.slotNum, &newSlot);
         footer->firstRID = newRID;
         footer->numSlots++;
+#ifdef DEBUG
+        cerr << "DEBUG: INSERTED " << key.toString() << " ON PAGE " << newRID.pageNum << " IN SLOT " << newRID.slotNum << endl;
+#endif
         return err::OK;
     }
 
@@ -535,19 +545,19 @@ RC IndexManager::insertInOrder(KeyData& key, AttrType type, const RID &rid, unsi
             do {
                 // Check if we are at the last record
                 if (record.nextSlot.pageNum != footer->pageNum) {
-                    RID blankRID;
-                    blankRID.pageNum = record.nextSlot.pageNum;
                     // write record at start of free memory
-                    writeRecordToBuffer(key, rid, blankRID, type, footer, buffer); 
+                    writeRecordToBuffer(key, rid, record.nextSlot, type, footer, buffer); 
                     // update "previous" entry to point to new record
                     memcpy(buffer + currSlot->recordOffset + currSlot->recordSize - sizeof(RID), &newRID, sizeof(RID));
                     // write new slot
                     writeIXSlot(buffer, newRID.slotNum, &newSlot);
                     footer->numSlots++;
+#ifdef DEBUG
+                    cerr << "DEBUG: INSERTED " << key.toString() << " ON PAGE " << newRID.pageNum << " IN SLOT " << newRID.slotNum << endl;
+#endif
                     return err::OK;
                 }
                 prevSlot = currSlot;
-                prevRID = currRID;
                 currSlot = getIXSlot(currRID.slotNum, buffer);
                 currRID = record.nextSlot;
                 ret  = loadIXRecord(currSlot->recordSize, currSlot->recordOffset, buffer, type, record);
@@ -562,6 +572,9 @@ RC IndexManager::insertInOrder(KeyData& key, AttrType type, const RID &rid, unsi
         // write new slot
         writeIXSlot(buffer, newRID.slotNum, &newSlot);
     }
+#ifdef DEBUG
+    cerr << "DEBUG: INSERTED " << key.toString() << " ON PAGE " << newRID.pageNum << " IN SLOT " << newRID.slotNum << endl;
+#endif
 
     // note: writeRecordToBuffer already updates footer->freeMemoryOffset
     //       still need to update number of slots
@@ -598,6 +611,9 @@ RC IndexManager::insertEntry(FileHandle &fileHandle,
     } else {
         // Pass control to split handler
         // Will perform cascade of splits and also insert necessary entries
+#ifdef DEBUG
+        cerr << "DEBUG: SPLITTING PAGE " << footer->pageNum << endl;
+#endif
         return splitHandler(fileHandle, parents, attribute.type, key_struct, rid, buffer);
     }
 }
@@ -914,5 +930,16 @@ int KeyData::compare(KeyData &key) {
             }
         case TypeVarChar:
             return strcmp(varchar, key.varchar);
+    }
+}
+
+string KeyData::toString() {
+    switch (type) {
+        case TypeInt:
+            return to_string(integer);
+        case TypeReal:
+            return to_string(real);
+        case TypeVarChar:
+            return string(varchar);
     }
 }
