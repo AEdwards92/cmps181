@@ -1,4 +1,3 @@
-
 #ifndef _ix_h_
 #define _ix_h_
 
@@ -133,7 +132,7 @@ class IndexManager {
         // Assumes fileHandle is active
         RC loadRootPage(FileHandle &fileHandle, void* buffer);
 
-        RC loadKeyData(const void* data, AttrType type, KeyData& key);
+        RC loadKeyData(const void* data, Attribute attr, KeyData& key);
 
         RC loadHighestKey(FileHandle& fileHandle, AttrType type, KeyData& key);
         // Find the appropriate leafPage for a key to be inserted

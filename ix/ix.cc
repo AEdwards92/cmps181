@@ -236,27 +236,20 @@ RC IndexManager::loadRootPage(FileHandle &fileHandle,
 }
 
 RC IndexManager::loadKeyData(const void* data, 
-                             AttrType type, 
+                             Attribute attr,
                              KeyData& key) {
-    unsigned size = 0;
-    switch (type) {
+    key.size = attr.length;
+    switch (attr.type) {
         case TypeInt:
             memcpy(&(key.integer), data, sizeof(int));
-            size = sizeof(int);
             break;
         case TypeReal:
             memcpy(&(key.real), data, sizeof(float));
-            size = sizeof(float);
             break;
         case TypeVarChar:
-            {
-                unsigned dataLen = *((unsigned*)data);
-                memcpy(&(key.varchar), (unsigned*)data + sizeof(unsigned), dataLen);
-                size = sizeof(unsigned) * (dataLen + 1);
-            }
+            memcpy(&(key.varchar), (char*)data, key.size);
     }
-    key.size = size;
-    key.type = type;
+    key.type = attr.type;
     return err::OK;
 }
 
@@ -480,7 +473,8 @@ RC IndexManager::writeRecordToBuffer(KeyData& key,
             memcpy(buffer + footer->freeMemoryOffset, &(key.integer), sizeof(float));
             break;
         case TypeVarChar:
-            memcpy(buffer + footer->freeMemoryOffset, &(key.varchar), key.size);
+            memcpy(buffer + footer->freeMemoryOffset, &(key.size), sizeof(unsigned));
+            memcpy(buffer + footer->freeMemoryOffset + sizeof(unsigned), &(key.varchar), key.size);
     }
 
     // Write RIDs
@@ -523,9 +517,7 @@ RC IndexManager::insertInOrder(KeyData& key, AttrType type, const RID &rid, unsi
         writeIXSlot(buffer, newRID.slotNum, &newSlot);
         footer->firstRID = newRID;
         footer->numSlots++;
-#ifdef DEBUG
-        cerr << "DEBUG: INSERTED " << key.toString() << " ON PAGE " << newRID.pageNum << " IN SLOT " << newRID.slotNum << endl;
-#endif
+
         return err::OK;
     }
 
@@ -552,9 +544,7 @@ RC IndexManager::insertInOrder(KeyData& key, AttrType type, const RID &rid, unsi
                     // write new slot
                     writeIXSlot(buffer, newRID.slotNum, &newSlot);
                     footer->numSlots++;
-#ifdef DEBUG
-                    cerr << "DEBUG: INSERTED " << key.toString() << " ON PAGE " << newRID.pageNum << " IN SLOT " << newRID.slotNum << endl;
-#endif
+
                     return err::OK;
                 }
                 prevSlot = currSlot;
@@ -572,9 +562,7 @@ RC IndexManager::insertInOrder(KeyData& key, AttrType type, const RID &rid, unsi
         // write new slot
         writeIXSlot(buffer, newRID.slotNum, &newSlot);
     }
-#ifdef DEBUG
-    cerr << "DEBUG: INSERTED " << key.toString() << " ON PAGE " << newRID.pageNum << " IN SLOT " << newRID.slotNum << endl;
-#endif
+
 
     // note: writeRecordToBuffer already updates footer->freeMemoryOffset
     //       still need to update number of slots
@@ -589,7 +577,7 @@ RC IndexManager::insertEntry(FileHandle &fileHandle,
 {
     // Build key structure
     KeyData key_struct;
-    RC ret = loadKeyData(key, attribute.type, key_struct);
+    RC ret = loadKeyData(key, attribute, key_struct);
     RETURN_ON_ERR(ret);
 
     unsigned char buffer[PAGE_SIZE] = {0};
@@ -611,9 +599,7 @@ RC IndexManager::insertEntry(FileHandle &fileHandle,
     } else {
         // Pass control to split handler
         // Will perform cascade of splits and also insert necessary entries
-#ifdef DEBUG
-        cerr << "DEBUG: SPLITTING PAGE " << footer->pageNum << endl;
-#endif
+
         return splitHandler(fileHandle, parents, attribute.type, key_struct, rid, buffer);
     }
 }
@@ -625,7 +611,7 @@ RC IndexManager::deleteEntry(FileHandle &fileHandle,
 {
     // Build key structure
     KeyData key_struct;
-    RC ret = loadKeyData(key, attribute.type, key_struct);
+    RC ret = loadKeyData(key, attribute, key_struct);
     RETURN_ON_ERR(ret);
 
     unsigned char buffer[PAGE_SIZE] = {0};
@@ -761,14 +747,14 @@ RC IX_ScanIterator::init(FileHandle &fileHandle,
         RETURN_ON_ERR(ret);
         _lowKey = _nextRecord.key;
     } else
-        _ixfm->loadKeyData(lowKey, attribute.type, _lowKey);
+        _ixfm->loadKeyData(lowKey, attribute, _lowKey);
 
     if (highKey == NULL) {
         ret = loadHighestRecord();
         RETURN_ON_ERR(ret);
         _highKey = _highestRecord.key;
     } else
-        _ixfm->loadKeyData(highKey, attribute.type, _highKey);
+        _ixfm->loadKeyData(highKey, attribute, _highKey);
 
     loadFirstRecord();
     return err::OK;

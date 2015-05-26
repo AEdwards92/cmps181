@@ -683,6 +683,10 @@ RC RBFM_ScanIterator::init(FileHandle& fileHandle,
 	_nextRID.pageNum = 0;
 	_nextRID.slotNum = 0;
 	
+    ret = _fileHandle->readPage(_nextRID.pageNum, _buffer);
+    if (ret != err::OK)
+        return ret;
+
 	if (compOp != NO_OP) {
 		ret = lookupAttr(conditionAttribute, _compIndex);
 		if (ret != err::OK) 
@@ -712,20 +716,17 @@ RC RBFM_ScanIterator::getNextRecord(RID& rid,
     unsigned numPages = _fileHandle->getNumberOfPages();
     if (_nextRID.pageNum >= numPages)
         return RBFM_EOF;
+    
+    RC ret = err::OK;
 
-    char buffer[PAGE_SIZE] = {0};
-    RC ret = _fileHandle->readPage(_nextRID.pageNum, buffer);
-    if (ret != err::OK)
-        return ret;
-
-    PageIndex* index = RecordBasedFileManager::getPageIndex(buffer);
+    PageIndex* index = RecordBasedFileManager::getPageIndex(_buffer);
 
     unsigned currentNumSlots = index->numSlots;
     PageNum currentPage = _nextRID.pageNum;
     while (_nextRID.pageNum < numPages) {
         if (_nextRID.pageNum != currentPage) {
             currentPage = _nextRID.pageNum;
-            RC ret = _fileHandle->readPage(_nextRID.pageNum, buffer);
+            RC ret = _fileHandle->readPage(_nextRID.pageNum, _buffer);
             if (ret != err::OK)
                 return ret;
             currentNumSlots = index->numSlots;
@@ -737,7 +738,7 @@ RC RBFM_ScanIterator::getNextRecord(RID& rid,
         // To avoid duplicate return values, and so RID's stay consistent, only check ALIVE
         // and TOMBSTONE records. If it is a TOMBSTONE then we must load buffer with the page
         // containing the actual record data
-        PageIndexEntry* entry = RecordBasedFileManager::getPageIndexEntry(buffer, _nextRID.slotNum);
+        PageIndexEntry* entry = RecordBasedFileManager::getPageIndexEntry(_buffer, _nextRID.slotNum);
         switch (entry->type) {
             case DEAD:
             case ANCHOR:
@@ -747,11 +748,11 @@ RC RBFM_ScanIterator::getNextRecord(RID& rid,
                 RID newRID;
                 while (entry->type == TOMBSTONE) {
                     newRID = entry->tombstoneRID;
-                    ret = _fileHandle->readPage(newRID.pageNum, buffer);
+                    ret = _fileHandle->readPage(newRID.pageNum, _buffer);
                     currentPage = newRID.pageNum;
                     if (ret != err::OK)
                         return ret;
-                    entry = RecordBasedFileManager::getPageIndexEntry(buffer, newRID.slotNum);
+                    entry = RecordBasedFileManager::getPageIndexEntry(_buffer, newRID.slotNum);
                 }
             }
             default: 
@@ -759,13 +760,13 @@ RC RBFM_ScanIterator::getNextRecord(RID& rid,
         }
         // Now entry points to an entry whose physical data is on buffer
         // We are ready to test the scan condition
-        if (not testScan(buffer + entry->recordOffset)) {
+        if (not testScan(_buffer + entry->recordOffset)) {
             updateNextRecord(currentNumSlots);
             continue;
         }
         // If we are here, then we passed. Copy the desired attributes to the user buffer
         rid = _nextRID;
-        copyRecord((char*) data, buffer + entry->recordOffset);
+        copyRecord((char*) data, _buffer + entry->recordOffset);
         updateNextRecord(currentNumSlots);
         return err::OK;
     }
@@ -872,6 +873,7 @@ RC RBFM_ScanIterator::updateNextRecord(unsigned numSlots)
 	if (_nextRID.slotNum >= numSlots) {
 		_nextRID.pageNum++;
 		_nextRID.slotNum = 0;
+        return _fileHandle->readPage(_nextRID.pageNum, _buffer);
 	}
     return err::OK;
 }

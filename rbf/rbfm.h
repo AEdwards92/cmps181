@@ -100,6 +100,7 @@ private:
     AttrType _compType;
     vector<AttrType> _returnAttrTypes;
     vector<unsigned> _returnAttrIndices;
+    char _buffer[PAGE_SIZE] = {0};
 
     RC lookupAttr(const string& conditionAttribute, unsigned& index);
     RC copyCompValue(AttrType attrType, const void* value);
