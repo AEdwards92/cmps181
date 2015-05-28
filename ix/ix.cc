@@ -692,6 +692,9 @@ IX_ScanIterator::IX_ScanIterator()
 
 IX_ScanIterator::~IX_ScanIterator()
 {
+    _fileHandle = NULL;
+    _footer = NULL;
+    _nextSlot = NULL;
 }
 
 
@@ -734,7 +737,7 @@ RC IX_ScanIterator::init(FileHandle &fileHandle,
                          bool        	highKeyInclusive) 
 {
     _ixfm = IndexManager::instance();
-    _fileHandle = fileHandle;
+    _fileHandle = &fileHandle;
     _type = attribute.type;
     _lowInclusive = lowKeyInclusive;
     _footer = NULL;
@@ -762,11 +765,11 @@ RC IX_ScanIterator::init(FileHandle &fileHandle,
 
 RC IX_ScanIterator::loadLowestRecord()
 {
-    RC ret = _ixfm->loadRootPage(_fileHandle, _buffer);
+    RC ret = _ixfm->loadRootPage(*_fileHandle, _buffer);
     RETURN_ON_ERR(ret);
     _footer = _ixfm->getIXFooter(_buffer);
     while (not _footer->isLeaf) {
-        ret = _fileHandle.readPage(_footer->child, _buffer);
+        ret = _fileHandle->readPage(_footer->child, _buffer);
         RETURN_ON_ERR(ret);
     }
     _nextSlot = _ixfm->getIXSlot(_footer->firstRID.slotNum, _buffer);
@@ -776,7 +779,7 @@ RC IX_ScanIterator::loadLowestRecord()
 RC IX_ScanIterator::loadHighestRecord()
 {
     unsigned char buffer[PAGE_SIZE] = {0};
-    RC ret = _ixfm->loadRootPage(_fileHandle, buffer);
+    RC ret = _ixfm->loadRootPage(*_fileHandle, buffer);
     RETURN_ON_ERR(ret);
     IndexPageFooter* footer = _ixfm->getIXFooter(buffer);
     IndexSlot* slot = _ixfm->getIXSlot(footer->firstRID.slotNum, buffer);
@@ -789,7 +792,7 @@ RC IX_ScanIterator::loadHighestRecord()
             RETURN_ON_ERR(ret);
         }
         // read rightmost child
-        ret = _fileHandle.readPage(record.rid.pageNum, buffer);
+        ret = _fileHandle->readPage(record.rid.pageNum, buffer);
         slot =  _ixfm->getIXSlot(footer->firstRID.slotNum, buffer);
         ret = _ixfm->loadIXRecord(slot->recordSize, slot->recordOffset, buffer, _type, record);
         RETURN_ON_ERR(ret);
@@ -813,7 +816,7 @@ RC IX_ScanIterator::loadFirstRecord()
 
     vector<PageNum> parents;
     
-    RC ret = _ixfm->loadLeafPage(_fileHandle, _lowKey, _type, parents, _buffer);
+    RC ret = _ixfm->loadLeafPage(*_fileHandle, _lowKey, _type, parents, _buffer);
     RETURN_ON_ERR(ret);
 
     _footer = _ixfm->getIXFooter(_buffer);
@@ -829,7 +832,7 @@ RC IX_ScanIterator::loadFirstRecord()
                 return err::OK;
             }
 
-            ret = _fileHandle.readPage(_nextRecord.nextSlot.pageNum, _buffer);
+            ret = _fileHandle->readPage(_nextRecord.nextSlot.pageNum, _buffer);
             RETURN_ON_ERR(ret);
             _nextSlot = _ixfm->getIXSlot(_footer->firstRID.slotNum, _buffer);
             ret  = _ixfm->loadIXRecord(_nextSlot->recordSize, _nextSlot->recordOffset, _buffer, _type, _nextRecord);
@@ -849,7 +852,7 @@ RC IX_ScanIterator::loadFirstRecord()
                 return err::OK;
             }
 
-            ret = _fileHandle.readPage(_nextRecord.nextSlot.pageNum, _buffer);
+            ret = _fileHandle->readPage(_nextRecord.nextSlot.pageNum, _buffer);
             RETURN_ON_ERR(ret);
             _nextSlot = _ixfm->getIXSlot(_footer->firstRID.slotNum, _buffer);
             ret  = _ixfm->loadIXRecord(_nextSlot->recordSize, _nextSlot->recordOffset, _buffer, _type, _nextRecord);
@@ -876,7 +879,7 @@ RC IX_ScanIterator::loadNextRecord()
         if (_footer->nextLeaf == 0) 
             return IX_EOF;
 
-        ret = _fileHandle.readPage(_footer->nextLeaf, _buffer);
+        ret = _fileHandle->readPage(_footer->nextLeaf, _buffer);
         RETURN_ON_ERR(ret);
         _nextSlot = _ixfm->getIXSlot(_footer->firstRID.slotNum, _buffer);
         ret = _ixfm->loadIXRecord(_nextSlot->recordSize, _nextSlot->recordOffset, _buffer, _type, _nextRecord);

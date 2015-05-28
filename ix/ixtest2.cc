@@ -1786,8 +1786,8 @@ void test()
 
     // Extra Credit Work
     //// Duplicat Entries
-    //testCase_extra_1(indexAgeFileName, attrAge);
-    //testCase_extra_2(indexAgeFileName, attrAge);
+    testCase_extra_1(indexAgeFileName, attrAge);
+    testCase_extra_2(indexAgeFileName, attrAge);
     //// TypeVarChar - mandatory for graduate students
     testCase_extra_3(indexEmpNameFileName, attrEmpName);
     return;

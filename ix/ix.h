@@ -192,7 +192,7 @@ class IX_ScanIterator {
         RC close();             						// Terminate index scan
     private:
         IndexManager* _ixfm;
-        FileHandle _fileHandle;
+        FileHandle* _fileHandle;
         AttrType _type;
         KeyData _lowKey;
         KeyData _highKey;
