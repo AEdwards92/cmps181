@@ -2,6 +2,7 @@
 #include "ix.h"
 #include "../util/errcodes.h"
 #include <string>
+#include <cstring>
 
 // copy constructor
 IndexRecord::IndexRecord(const IndexRecord& that) {
