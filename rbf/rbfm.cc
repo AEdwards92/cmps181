@@ -335,10 +335,12 @@ RC RecordBasedFileManager::deleteRecord(FileHandle &fileHandle,
         case DEAD:
             return err::RECORD_DELETED;
         case TOMBSTONE:
-            ret = deleteRID(fileHandle, index, entry, buffer, rid);
+            // recursively delete tombstones
+            ret = deleteRecord(fileHandle, recordDescriptor, entry->tombstoneRID);
             if (ret != err::OK) 
                 return ret;
-            return deleteRecord(fileHandle, recordDescriptor, entry->tombstoneRID);
+            return deleteRID(fileHandle, index, entry, buffer, rid);
+            
     }
 
 }
