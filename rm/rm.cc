@@ -15,11 +15,14 @@ RelationManager* RelationManager::instance() {
 RelationManager::RelationManager() :
 	TABLE_ID_COUNTER(1) {
 	rbfm = RecordBasedFileManager::instance();
+	ix = IndexManager::instance();
+	pfm = PagedFileManager::instance();
+
 	Attribute attr;
 	attr.name = "TableId";
 	attr.type = TypeInt;
 	attr.length = 4;
-    tableVec.push_back(attr);
+	tableVec.push_back(attr);
 
 	attr.name = "TableName";
 	attr.type = TypeVarChar;
@@ -71,11 +74,33 @@ RelationManager::RelationManager() :
 	attr.type = TypeInt;
 	columnVec.push_back(attr);
 
+	//added for index
+	attr.name = "TableID";
+	attr.length = 4;
+	attr.type = TypeInt;
+	indexVec.push_back(attr);
+
+	attr.name = "TableName";
+	attr.length = 256;
+	attr.type = TypeVarChar;
+	indexVec.push_back(attr);
+
+	attr.name = "ColumnPosition";
+	attr.length = 4;
+	attr.type = TypeInt;
+	indexVec.push_back(attr);
+
+	attr.name = "ColumnName";
+	attr.length = 256;
+	attr.type = TypeVarChar;
+	indexVec.push_back(attr);
+
 	if (fexist("Tables.tbl")) {
 		loadSystem();
 	} else {
 		createTable("Tables", tableVec, "System");
 		createTable("Columns", columnVec, "System");
+		createTable("Indices", indexVec, "System");
 	}
 
 }
@@ -131,7 +156,6 @@ RC RelationManager::loadSystem() {
 		data = data + sizeof(int);
 		memcpy(&columnPosition, data, sizeof(int));
 
-
 		if (columnsMap.find(tableId) != columnsMap.end()) {
 			(*columnsMap[tableId])[columnPosition] = rid;
 		} else {
@@ -146,6 +170,27 @@ RC RelationManager::loadSystem() {
 
 	attributeNames.clear();
 
+	//added for index
+	attributeNames.push_back(indexVec[0].name); //table id
+	attributeNames.push_back(indexVec[2].name); //column position
+	scan("Indices", indexVec[0].name, NO_OP, NULL, attributeNames, rmsi);
+	while (rmsi.getNextTuple(rid, data) != RM_EOF) {
+		memcpy(&tableId, data, sizeof(int));
+
+		data = data + sizeof(int);
+		memcpy(&columnPosition, data, sizeof(int));
+
+		if (indexMap.find(tableId) != indexMap.end()) {
+			(*indexMap[tableId])[columnPosition] = rid;
+		} else {
+			map<int, RID> * indexEntryMap = new map<int, RID> ();
+			(*indexEntryMap)[columnPosition] = rid;
+			(indexMap[tableId]) = indexEntryMap;
+		}
+
+		data = beginOfData;
+	}
+	rmsi.close();
 
 	free(beginOfData);
 
@@ -165,12 +210,18 @@ RelationManager::~RelationManager() {
 		delete it->second;
 	}
 
+	for (map<int, map<int, RID> *>::iterator it = indexMap.begin(); it
+			!= indexMap.end(); ++it) {
+		delete it->second;
+	}
+
 }
 
 RC RelationManager::createTable(const string &tableName,
 		const vector<Attribute> &attrs) {
 	//invalid table name
-	if (tableName.compare("Tables") == 0 || tableName.compare("Columns") == 0) {
+	if (tableName.compare("Tables") == 0 || tableName.compare("Columns") == 0
+			|| tableName.compare("Indices") == 0) {
 		return -1;
 	}
 
@@ -227,7 +278,6 @@ RC RelationManager::createTable(const string &tableName,
 	if (ret != err::OK) {
 		return ret;
 	}
-
 
 	for (int i = 0; i < numOfCol; i++) {
 		int columnPosition = i + 1;
@@ -323,78 +373,140 @@ RC RelationManager::insertColumnsEntry(string tableName, string columnName,
 	return ret;
 }
 
+RC RelationManager::insertIndexEntry(string tableName, string columnName,
+		int tableID, int columnPos, FileHandle &fileHandle, RID &rid) {
+	char * recordBuffer = (char *) malloc(determineMemoryNeeded(indexVec));
+
+	RC ret;
+	int offset = 0;
+
+	appendData(indexVec[0].length, offset, recordBuffer, (char *) &tableID,
+			indexVec[0].type); //table id
+	appendData(tableName.size(), offset, recordBuffer, tableName.c_str(),
+			indexVec[1].type); //table name
+	appendData(indexVec[2].length, offset, recordBuffer, (char *) &columnPos,
+			indexVec[2].type); // column Position
+	appendData(columnName.size(), offset, recordBuffer, columnName.c_str(),
+			indexVec[3].type); // column name
+
+	ret = rbfm->insertRecord(fileHandle, indexVec, recordBuffer, rid);
+	if (ret != err::OK) {
+		return ret;
+	}
+
+	free(recordBuffer);
+
+	return ret;
+}
+
 RC RelationManager::deleteTable(const string &tableName) {
 	RC ret = -1;
-	if (tablesMap.find(tableName) != tablesMap.end())
-	{
+	if (tablesMap.find(tableName) != tablesMap.end()) {
 		map<int, RID> * tableID = tablesMap[tableName];
 
 		int table_ID = (*tableID).begin()->first;
 
-		RID rid = (*tableID).begin()->second;
 		if (isSystemTableRequest(tableName)) {
 			return -1;
 		}
-		map<int, RID> * columnsEntries = columnsMap[table_ID];
 
+		RID rid;
 		FileHandle fileHandle;
-		ret = rbfm->openFile("Columns.tbl", fileHandle);
 
-		if (ret == err::OK) {
+		//added for index
 
-			vector<Attribute> recordDescriptor;
-			for (map<int, RID>::iterator it = (*columnsEntries).begin(); it
-					!= (*columnsEntries).end(); ++it) {
+		vector<Attribute> recordDescriptor;
+		ret = getAttributes(tableName, recordDescriptor);
+
+		if (ret != err::OK)
+			return ret;
+
+		if (indexMap.find(table_ID) != indexMap.end()) { // if this table has index file(s)
+			map<int, RID> * indexEntry = indexMap[table_ID];
+
+			ret = rbfm->openFile("Indices.tbl", fileHandle);
+
+			if (ret != err::OK) {
+				return ret;
+			}
+
+			for (map<int, RID>::iterator itr = indexEntry->begin(); itr
+					!= indexEntry->end(); itr++) {
+				int position = itr->first;
+				rid = itr->second;
+
+				string columnName = recordDescriptor[position - 1].name;
+				string indexFileName = tableName + "_" + columnName + ".idx";
+
+				ret = ix->destroyFile(indexFileName);
 				if (ret != err::OK) {
-					break;
+					rbfm->closeFile(fileHandle);
+					return ret;
+				}
+				ret = rbfm->deleteRecord(fileHandle, indexVec, rid);
+				if (ret != err::OK) {
+					rbfm->closeFile(fileHandle);
+					return ret;
 				}
 
-				rid = it->second;
-				ret = rbfm->deleteRecord(fileHandle, columnVec, rid);
 			}
+
+			delete (indexEntry);
+			indexMap.erase(table_ID);
 
 			ret = rbfm->closeFile(fileHandle);
-
 			if (ret != err::OK) {
 				return ret;
 			}
+		}
 
+		map<int, RID> * columnsEntries = columnsMap[table_ID];
+		ret = rbfm->openFile("Columns.tbl", fileHandle);
+		if (ret != err::OK) {
+			rbfm->closeFile(fileHandle);
+			return ret;
+		}
 
-			delete (columnsEntries);
-			columnsMap.erase(table_ID);
-
-
-			rid = (*tableID).begin()->second;
-
-			ret = rbfm->openFile("Tables.tbl", fileHandle);
-
-			if (ret != err::OK) {
-				return ret;
-			}
-
-			ret = rbfm->deleteRecord(fileHandle, tableVec, rid);
-
+		//vector < Attribute > recordDescriptor;
+		for (map<int, RID>::iterator it = (*columnsEntries).begin(); it
+				!= (*columnsEntries).end(); ++it) {
+			rid = it->second;
+			ret = rbfm->deleteRecord(fileHandle, columnVec, rid);
 			if (ret != err::OK) {
 				rbfm->closeFile(fileHandle);
 				return ret;
 			}
-
-			delete (tableID);
-			tablesMap.erase(tableName);
-
-			ret = rbfm->closeFile(fileHandle);
-
-			if (ret != err::OK) {
-				return ret;
-			}
-
-			string fileName = tableName + ".tbl";
-			ret = rbfm->destroyFile(fileName);
-
-			if (ret != err::OK) {
-				return ret;
-			}
 		}
+
+		delete (columnsEntries);
+		columnsMap.erase(table_ID);
+		ret = rbfm->closeFile(fileHandle);
+		if (ret != err::OK) {
+			return ret;
+		}
+		rid = (*tableID).begin()->second;
+		ret = rbfm->openFile("Tables.tbl", fileHandle);
+		if (ret != err::OK) {
+			return ret;
+		}
+		ret = rbfm->deleteRecord(fileHandle, tableVec, rid);
+		if (ret != err::OK) {
+			rbfm->closeFile(fileHandle);
+			return ret;
+		}
+		delete (tableID);
+		tablesMap.erase(tableName);
+		ret = rbfm->closeFile(fileHandle);
+		if (ret != err::OK) {
+			return ret;
+		}
+		string fileName = tableName + ".tbl";
+		ret = rbfm->destroyFile(fileName);
+
+		if (ret != err::OK) {
+			return ret;
+		}
+
 	}
 	return ret;
 }
@@ -402,6 +514,7 @@ RC RelationManager::deleteTable(const string &tableName) {
 RC RelationManager::getAttributes(const string &tableName,
 		vector<Attribute> &attrs) {
 	RC ret = -1;
+	attrs.clear();
 
 	if (tablesMap.find(tableName) != tablesMap.end()) //check if table exists in the map
 	{
@@ -414,6 +527,7 @@ RC RelationManager::getAttributes(const string &tableName,
 		ret = rbfm->openFile("Columns.tbl", fileHandle);
 
 		if (ret != err::OK) {
+			rbfm->closeFile(fileHandle);
 			return ret;
 		}
 
@@ -485,12 +599,13 @@ RC RelationManager::insertTuple(const string &tableName, const void *data,
 
 	FileHandle fileHandle;
 
-	vector<Attribute> tableAttribs;
+	vector<Attribute> recordDescriptor;
 
 	map<int, RID> * tableID = tablesMap[tableName];
-	rid = (*tableID).begin()->second;
+	int table_ID = tableID->begin()->first;
+	//rid = (*tableID).begin()->second;
 
-	getAttributes(tableName, tableAttribs);
+	getAttributes(tableName, recordDescriptor);
 	string fileName = tableName + ".tbl";
 
 	RC ret;
@@ -500,14 +615,50 @@ RC RelationManager::insertTuple(const string &tableName, const void *data,
 		return ret;
 	}
 
-	ret = rbfm->insertRecord(fileHandle, tableAttribs, data, rid);
+	ret = rbfm->insertRecord(fileHandle, recordDescriptor, data, rid);
 
 	if (ret != err::OK) {
 		rbfm->closeFile(fileHandle);
 		return ret;
 	}
 
-	return rbfm->closeFile(fileHandle);
+	ret = rbfm->closeFile(fileHandle);
+	if (ret != err::OK) {
+		return ret;
+	}
+
+	//added for index
+	if (indexMap.find(table_ID) == indexMap.end())
+		return ret;
+
+	for (map<int, RID>::iterator itr = indexMap[table_ID]->begin(); itr
+			!= indexMap[table_ID]->end(); ++itr) {
+		int position = itr->first;
+		Attribute keyAttribute = recordDescriptor[position - 1];
+
+		string indexFileName = tableName + "_" + keyAttribute.name + ".idx";
+		FileHandle indexFileHandle;
+		ret = ix->openFile(indexFileName, indexFileHandle);
+		if (ret != err::OK) {
+			return ret;
+		}
+
+		int startOffset = readFieldOffset(data, position, recordDescriptor);
+
+		ret = ix->insertEntry(indexFileHandle, keyAttribute, (char *) data
+				+ startOffset, rid);
+		if (ret != err::OK) {
+			ix->closeFile(indexFileHandle);
+			return ret;
+		}
+
+		ret = ix->closeFile(indexFileHandle);
+		if (ret != err::OK) {
+			return ret;
+		}
+	}
+
+	return ret;
 
 }
 
@@ -532,14 +683,51 @@ RC RelationManager::deleteTuples(const string &tableName) {
 		return ret;
 	}
 
-	return rbfm->closeFile(fileHandle);
+	ret = rbfm->closeFile(fileHandle);
+	if (ret != err::OK) {
+		return ret;
+	}
 
+	//added for index
+	int table_ID = tablesMap[tableName]->begin()->first;
+
+	if (indexMap.find(table_ID) == indexMap.end())
+		return ret;
+
+	vector<Attribute> recordDescriptor;
+	ret = getAttributes(tableName, recordDescriptor);
+	if (ret != err::OK) {
+		return ret;
+	}
+
+	map<int, RID> *indexEntry = indexMap[table_ID];
+	for (map<int, RID>::iterator itr = indexEntry->begin(); itr
+			!= indexEntry->end(); itr++) {
+		int position = itr->first;
+		string columnName = recordDescriptor[position - 1].name;
+		string fileName = tableName + "_" + columnName + ".idx";
+
+		ret = ix->destroyFile(fileName);
+		if (ret != err::OK) {
+			return ret;
+		}
+
+		ret = ix->createFile(fileName);
+		if (ret != err::OK) {
+			return ret;
+		}
+	}
+
+	return ret;
 }
 
 RC RelationManager::deleteTuple(const string &tableName, const RID &rid) {
 	if (isSystemTableRequest(tableName)) {
 		return -1;
 	}
+
+	map<int, RID> * tableID = tablesMap[tableName];
+	int table_ID = tableID->begin()->first;
 
 	FileHandle fileHandle;
 	RC ret;
@@ -554,13 +742,67 @@ RC RelationManager::deleteTuple(const string &tableName, const RID &rid) {
 		return ret;
 	}
 
-	ret = rbfm->deleteRecord(fileHandle, recordDescriptor, rid);
-//	if (ret != err::OK) {
-//		rbfm->closeFile(fileHandle);
-//		return ret;
-//	}
+    //the data is needed for deleting indexes
+	void *data = malloc(PAGE_SIZE);
+	ret = rbfm->readRecord(fileHandle, recordDescriptor, rid, data);
 
-	return rbfm->closeFile(fileHandle);
+	if (ret != err::OK) {
+		free(data);
+		rbfm->closeFile(fileHandle);
+		return ret;
+	}
+
+	ret = rbfm->deleteRecord(fileHandle, recordDescriptor, rid);
+		if (ret != err::OK) {
+		free(data);
+		rbfm->closeFile(fileHandle);
+		return ret;
+	}
+
+	ret = rbfm->closeFile(fileHandle);
+
+	if (ret != err::OK) {
+		free(data);
+		return ret;
+	}
+
+	//added codes for index
+	if (indexMap.find(table_ID) == indexMap.end()) {
+		free(data);
+		return ret;
+	}
+
+	for (map<int, RID>::iterator itr = indexMap[table_ID]->begin(); itr
+			!= indexMap[table_ID]->end(); ++itr) {
+		int position = itr->first;
+		Attribute keyAttribute = recordDescriptor[position - 1];
+
+		string indexFileName = tableName + "_" + keyAttribute.name + ".idx";
+		FileHandle indexFileHandle;
+		ret = ix->openFile(indexFileName, indexFileHandle);
+		if (ret != err::OK) {
+			free(data);
+			return ret;
+		}
+		int startOffset = readFieldOffset(data, position, recordDescriptor);
+
+		ret = ix->deleteEntry(indexFileHandle, keyAttribute, (char *) data
+				+ startOffset, rid);
+		if (ret != err::OK) {
+			free(data);
+			ix->closeFile(indexFileHandle);
+			return ret;
+		}
+		ret = ix->closeFile(indexFileHandle);
+		if (ret != err::OK) {
+			free(data);
+			return ret;
+		}
+	}
+
+	free(data);
+
+	return ret;
 
 }
 
@@ -570,6 +812,9 @@ RC RelationManager::updateTuple(const string &tableName, const void *data,
 		return -1;
 	}
 
+	map<int, RID> * tableID = tablesMap[tableName];
+	int table_ID = tableID->begin()->first;
+
 	FileHandle fileHandle;
 
 	vector<Attribute> recordDescriptor;
@@ -583,29 +828,98 @@ RC RelationManager::updateTuple(const string &tableName, const void *data,
 		return ret;
 	}
 
-	ret = rbfm->updateRecord(fileHandle, recordDescriptor, data, rid);
-
+	void *oldData = malloc(PAGE_SIZE);
+	ret = rbfm->readRecord(fileHandle, recordDescriptor, rid, oldData);
 	if (ret != err::OK) {
+		free(oldData);
 		rbfm->closeFile(fileHandle);
 		return ret;
 	}
 
-	return rbfm->closeFile(fileHandle);
+	ret = rbfm->updateRecord(fileHandle, recordDescriptor, data, rid);
+
+	if (ret != err::OK) {
+		free(oldData);
+		rbfm->closeFile(fileHandle);
+		return ret;
+	}
+
+	ret = rbfm->closeFile(fileHandle);
+
+	if (ret != err::OK) {
+		free(oldData);
+		return ret;
+	}
+
+	//added codes for index
+	if (indexMap.find(table_ID) == indexMap.end()) {
+		free(oldData);
+		return ret;//check valid table_ID
+	}
+
+	for (map<int, RID>::iterator itr = indexMap[table_ID]->begin(); itr
+			!= indexMap[table_ID]->end(); ++itr) {
+		int position = itr->first;
+		Attribute keyAttribute = recordDescriptor[position - 1];
+		int oldKeyStartOffset = readFieldOffset(oldData, position,
+				recordDescriptor);
+		int newKeyStartOffset = readFieldOffset(oldData, position,
+				recordDescriptor);
+
+		if (!isFieldEqual((char *) oldData + oldKeyStartOffset, (char *) data
+				+ newKeyStartOffset, keyAttribute.type)) {
+			string indexFileName = tableName + "_" + keyAttribute.name + ".idx";
+			FileHandle indexFileHandle;
+
+			ret = ix->openFile(indexFileName, indexFileHandle);
+			if (ret != err::OK) {
+				free(oldData);
+				return ret;
+			}
+
+			ret = ix->deleteEntry(indexFileHandle, keyAttribute,
+					(char *) oldData + oldKeyStartOffset, rid);
+			if (ret != err::OK) {
+				free(oldData);
+				ix->closeFile(indexFileHandle);
+				return ret;
+			}
+
+			ret = ix->insertEntry(indexFileHandle, keyAttribute, (char *) data
+					+ newKeyStartOffset, rid);
+			if (ret != err::OK) {
+				free(oldData);
+				ix->closeFile(indexFileHandle);
+				return ret;
+			}
+
+			ret = ix->closeFile(indexFileHandle);
+			if (ret != err::OK) {
+				free(oldData);
+				return ret;
+			}
+		}
+
+	}
+
+	free(oldData);
+
+	return ret;
 
 }
 
 RC RelationManager::readTuple(const string &tableName, const RID &rid,
 		void *data) {
-	if (tablesMap.find(tableName) == tablesMap.end())
-	{
+	if (tablesMap.find(tableName) == tablesMap.end()) {
 		return -1;
 	}
 
 	FileHandle fileHandle;
 	string fileName = tableName + ".tbl";
+	RC ret;
+
 	vector<Attribute> recordDescriptor;
 
-	RC ret;
 	ret = getAttributes(tableName, recordDescriptor);
 
 	if (ret != err::OK) {
@@ -689,6 +1003,141 @@ RC RelationManager::reorganizePage(const string &tableName,
 
 }
 
+//added codes for index
+RC RelationManager::createIndex(const string & tableName,
+		const string & attributeName) {
+	RC ret = -1;
+
+	//string indexFileName = tableName + "_idx";
+
+	string indexFileName = tableName + "_" + attributeName + ".idx";
+
+	if (tablesMap.find(tableName) == tablesMap.end())
+		return ret;
+
+	map<int, RID> * tableIDMap = tablesMap[tableName];
+	int table_ID = (*tableIDMap).begin()->first;
+
+	vector<Attribute> recordDescriptor;
+	ret = getAttributes(tableName, recordDescriptor);
+	if (ret != err::OK) {
+		return ret;
+	}
+
+	int attrPos = 1;
+	for (; attrPos <= (int) recordDescriptor.size(); attrPos++) {
+		if (recordDescriptor[attrPos - 1].name.compare(attributeName) == 0)
+			break;
+	}
+	if (attrPos > (int) recordDescriptor.size())
+		return -1;
+
+	map<int, RID> *indexEntryMap;
+	if (indexMap.find(table_ID) == indexMap.end()) {
+		indexEntryMap = new map<int, RID> ();
+		indexMap[table_ID] = indexEntryMap;
+	} else {
+		indexEntryMap = indexMap[table_ID];
+
+		if (indexEntryMap->find(attrPos) != indexEntryMap->end()) {
+			return -1;
+		}
+	}
+
+	ret = ix->createFile(indexFileName);
+	if (ret != err::OK) {
+		return ret;
+	}
+	FileHandle fileHandle;
+	ret = rbfm->openFile("Indices.tbl", fileHandle);
+	if (ret != err::OK) {
+		return ret;
+	}
+
+	RID indexRid;
+	ret = insertIndexEntry(tableName, attributeName, table_ID, attrPos,
+			fileHandle, indexRid);
+	if (ret != err::OK) {
+		rbfm->closeFile(fileHandle);
+		return ret;
+	}
+
+	ret = rbfm->closeFile(fileHandle);
+	if (ret != err::OK) {
+		return ret;
+	}
+	(*indexEntryMap)[attrPos] = indexRid;
+
+	FileHandle indexFileHandle;
+	ret = ix->openFile(indexFileName, indexFileHandle);
+	if (ret != err::OK) {
+		return ret;
+	}
+
+	RM_ScanIterator rmsi;
+	Attribute keyAttribute = recordDescriptor[attrPos - 1];
+	vector < string > attributeNames;
+	attributeNames.push_back(keyAttribute.name);
+
+	ret = scan(tableName, keyAttribute.name, NO_OP, NULL, attributeNames, rmsi);
+	if (ret != err::OK) {
+		ix->closeFile(indexFileHandle);
+		return ret;
+	}
+	char *data = (char *) malloc(MAX_ATTRIBUTE_LENGTH);
+	RID rid;
+
+	while (rmsi.getNextTuple(rid, data) != RM_EOF)
+		ix->insertEntry(indexFileHandle, keyAttribute, data, rid);
+
+	rmsi.close();
+	free(data);
+
+	ret = ix->closeFile(indexFileHandle);
+	return ret;
+}
+
+RC RelationManager::destroyIndex(const string & tableName,
+		const string &attributeName) {
+	RC ret = -1;
+	string indexFileName = tableName + "_" + attributeName + ".idx";
+	map<int, RID> * tableIDMap = tablesMap[tableName];
+	int table_ID = (*tableIDMap).begin()->first;
+	vector<Attribute> attributes;
+	ret = getAttributes(tableName, attributes);
+	if (ret != err::OK) {
+		return ret;
+	}
+	int attrPos = 1;
+	for (; attrPos <= (int) attributes.size(); attrPos++) {
+		if (attributes[attrPos - 1].name.compare(attributeName) == 0)
+			break;
+	}
+	if (attrPos > (int) attributes.size())
+		return -1;
+	if (indexMap.find(table_ID) == indexMap.end())
+		return -1;
+
+	map<int, RID> *indexEntryMap = indexMap[table_ID];
+
+	if (indexEntryMap->find(attrPos) == indexEntryMap->end())
+		return -1;
+	RID indexRid = (*indexEntryMap)[attrPos];
+
+	indexEntryMap->erase(attrPos);
+	if (indexEntryMap->size() == 0) {
+		delete (indexMap[table_ID]);
+		indexMap.erase(table_ID);
+	}
+
+	ret = deleteTuple("Indices", indexRid);
+	if (ret != err::OK) {
+		return ret;
+	}
+	return ix->destroyFile(indexFileName);
+
+}
+
 RC RelationManager::scan(const string &tableName,
 		const string &conditionAttribute, const CompOp compOp,
 		const void *value, const vector<string> &attributeNames,
@@ -716,6 +1165,42 @@ RC RelationManager::scan(const string &tableName,
 		return rm_ScanIterator.initialize(recordDescriptor, compOp, value,
 				attributeNames, conditionAttribute);
 	}
+
+}
+
+RC RelationManager::indexScan(const string &tableName,
+		const string &attributeName, const void *lowKey, const void *highKey,
+		bool lowKeyInclusive, bool highKeyInclusive,
+		RM_IndexScanIterator &rm_IndexScanIterator) {
+	RC ret = -1;
+	string indexFileName = tableName + "_" + attributeName + ".idx";
+
+	if (!pfm->fexist(indexFileName))
+		return ret;
+	ret = ix->openFile(indexFileName, rm_IndexScanIterator.indexFileHandle);
+	if (ret != err::OK) {
+		return ret;
+	}
+	Attribute keyAttribute;
+	vector<Attribute> attributes;
+	ret = getAttributes(tableName, attributes);
+	if (ret != err::OK) {
+		return ret;
+	}
+	unsigned i = 0;
+	for (; i < attributes.size(); i++) {
+		if (attributes[i].name.compare(attributeName) == 0) {
+			keyAttribute = attributes[i];
+			break;
+		}
+	}
+	if (i == attributes.size()) {
+		ix->closeFile(rm_IndexScanIterator.indexFileHandle);
+		return -1;
+	}
+
+	return rm_IndexScanIterator.initialize(keyAttribute, lowKey, highKey,
+			lowKeyInclusive, highKeyInclusive);
 
 }
 
@@ -768,7 +1253,6 @@ bool RelationManager::isSystemTableRequest(string tableName) {
 
 	map<int, RID> * tableID = tablesMap[tableName];
 
-
 	RID rid = (*tableID).begin()->second;
 
 	char * tableType = (char*) malloc(sizeof(int) + tableVec[2].length);
@@ -792,6 +1276,50 @@ bool RelationManager::isSystemTableRequest(string tableName) {
 	return isSysTbl;
 }
 
+int RelationManager::readFieldOffset(const void *data, int attrPosition,
+		vector<Attribute> recordDescriptor) {
+	int offset = 0;
+
+	for (int i = 0; i < attrPosition - 1; i++) {
+		Attribute attr = recordDescriptor[i];
+
+		if (attr.type == TypeInt)
+			offset += sizeof(int);
+		else if (attr.type == TypeReal)
+			offset += sizeof(float);
+		else {
+			int fieldLength = *(int *) ((char *) data + offset);
+			offset += sizeof(int) + fieldLength;
+		}
+	}
+
+	return offset;
+}
+
+bool RelationManager::isFieldEqual(const char *a, const char *b, AttrType type) {
+	if (type == TypeInt) {
+		int A = *(int *) a;
+		int B = *(int *) b;
+
+		return A == B;
+	} else if (type == TypeReal) {
+		float A = *(float *) a;
+		float B = *(float *) b;
+
+		if (A - B < 0.00001 && A - B > -0.00001)
+			return true;
+		else
+			return false;
+	} else {
+		int lengthA = *(int *) a;
+		int lengthB = *(int *) b;
+		string A(a + sizeof(int), lengthA);
+		string B(b + sizeof(int), lengthB);
+
+		return A.compare(B) == 0;
+	}
+}
+
 bool RelationManager::fexist(string filename) {
 	struct stat buffer;
 	if (stat(filename.c_str(), &buffer)) {
@@ -810,8 +1338,8 @@ RM_ScanIterator::~RM_ScanIterator() {
 RC RM_ScanIterator::initialize(const vector<Attribute> &recordDescriptor,
 		const CompOp compOp, const void *value,
 		const vector<string> &attributeNames, const string &conditionAttribute) {
-	return rbfm_scanner.init(fileHandle, recordDescriptor, conditionAttribute, compOp, value,
-			attributeNames);
+	return rbfm_scanner.init(fileHandle, recordDescriptor, conditionAttribute,
+			compOp, value, attributeNames);
 }
 
 RC RM_ScanIterator::getNextTuple(RID &rid, void *data) {
@@ -821,4 +1349,34 @@ RC RM_ScanIterator::getNextTuple(RID &rid, void *data) {
 RC RM_ScanIterator::close() {
 	rbfm_scanner.close();
 	return rbfm->closeFile(fileHandle);
+}
+
+RM_IndexScanIterator::RM_IndexScanIterator() {
+	ix = IndexManager::instance();
+}
+
+RM_IndexScanIterator::~RM_IndexScanIterator() {
+}
+
+RC RM_IndexScanIterator::initialize(const Attribute keyAttribute,
+		const void *lowKey, const void *highKey, bool lowKeyInclusive,
+		bool highKeyInclusive) {
+	return ix->scan(indexFileHandle, keyAttribute, lowKey, highKey,
+			lowKeyInclusive, highKeyInclusive, ix_scanner);
+}
+
+RC RM_IndexScanIterator::getNextEntry(RID &rid, void *key) {
+	return ix_scanner.getNextEntry(rid, key);
+}
+
+RC RM_IndexScanIterator::close() {
+	RC ret;
+	ret = ix_scanner.close();
+
+	if (ret != err::OK) {
+		ix->closeFile(indexFileHandle);
+		return ret;
+	}
+
+	return ix->closeFile(indexFileHandle);
 }
