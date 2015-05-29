@@ -134,7 +134,7 @@ RC RelationManager::loadSystem() {
 		if (tableId > maxTableId)
 			maxTableId = tableId;
 
-		map<int, RID> * tableIDToRidMap = new map<int, RID> ;
+		map<int, RID> * tableIDToRidMap = new map<int, RID> ();
 		(*tableIDToRidMap)[tableId] = rid;
 
 		tablesMap[tableName] = tableIDToRidMap;
@@ -322,6 +322,7 @@ RC RelationManager::insertTablesEntry(string tableName, string tableType,
 	ret = rbfm->insertRecord(fileHandle, tableVec, recordBuffer, rid);
 
 	if (ret != err::OK) {
+		free(recordBuffer);
 		return ret;
 	}
 
@@ -364,9 +365,9 @@ RC RelationManager::insertColumnsEntry(string tableName, string columnName,
 
 	ret = rbfm->insertRecord(fileHandle, columnVec, recordBuffer, rid);
 
-	if (ret != err::OK) {
-		return ret;
-	}
+	//	if (ret != err::OK) {
+	//		return ret;
+	//	}
 
 	free(recordBuffer);
 
@@ -390,9 +391,9 @@ RC RelationManager::insertIndexEntry(string tableName, string columnName,
 			indexVec[3].type); // column name
 
 	ret = rbfm->insertRecord(fileHandle, indexVec, recordBuffer, rid);
-	if (ret != err::OK) {
-		return ret;
-	}
+	//	if (ret != err::OK) {
+	//		return ret;
+	//	}
 
 	free(recordBuffer);
 
@@ -401,14 +402,13 @@ RC RelationManager::insertIndexEntry(string tableName, string columnName,
 
 RC RelationManager::deleteTable(const string &tableName) {
 	RC ret = -1;
+	if (isSystemTableRequest(tableName)) {
+		return ret;
+	}
 	if (tablesMap.find(tableName) != tablesMap.end()) {
 		map<int, RID> * tableID = tablesMap[tableName];
 
 		int table_ID = (*tableID).begin()->first;
-
-		if (isSystemTableRequest(tableName)) {
-			return -1;
-		}
 
 		RID rid;
 		FileHandle fileHandle;
@@ -421,7 +421,7 @@ RC RelationManager::deleteTable(const string &tableName) {
 		if (ret != err::OK)
 			return ret;
 
-		if (indexMap.find(table_ID) != indexMap.end()) { // if this table has index file(s)
+		if (indexMap.find(table_ID) != indexMap.end()) {
 			map<int, RID> * indexEntry = indexMap[table_ID];
 
 			ret = rbfm->openFile("Indices.tbl", fileHandle);
@@ -503,10 +503,7 @@ RC RelationManager::deleteTable(const string &tableName) {
 		string fileName = tableName + ".tbl";
 		ret = rbfm->destroyFile(fileName);
 
-		if (ret != err::OK) {
-			return ret;
-		}
-
+		return ret;
 	}
 	return ret;
 }
@@ -516,7 +513,7 @@ RC RelationManager::getAttributes(const string &tableName,
 	RC ret = -1;
 	attrs.clear();
 
-	if (tablesMap.find(tableName) != tablesMap.end()) //check if table exists in the map
+	if (tablesMap.find(tableName) != tablesMap.end())
 	{
 		map<int, RID> * tableID = tablesMap[tableName];
 
@@ -546,7 +543,6 @@ RC RelationManager::getAttributes(const string &tableName,
 			if (ret == err::OK) {
 				rbfm->readRecord(fileHandle, columnVec, rid, columnsRecord);
 
-				//read the column name
 				columnsRecord = columnsRecord + sizeof(int); //skip the table_id
 
 				int stringLength;
@@ -742,7 +738,7 @@ RC RelationManager::deleteTuple(const string &tableName, const RID &rid) {
 		return ret;
 	}
 
-    //the data is needed for deleting indexes
+	//the data is needed for deleting indexes
 	void *data = malloc(PAGE_SIZE);
 	ret = rbfm->readRecord(fileHandle, recordDescriptor, rid, data);
 
@@ -753,7 +749,7 @@ RC RelationManager::deleteTuple(const string &tableName, const RID &rid) {
 	}
 
 	ret = rbfm->deleteRecord(fileHandle, recordDescriptor, rid);
-		if (ret != err::OK) {
+	if (ret != err::OK) {
 		free(data);
 		rbfm->closeFile(fileHandle);
 		return ret;
