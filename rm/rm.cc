@@ -1171,7 +1171,7 @@ RC RelationManager::indexScan(const string &tableName,
 	RC ret = -1;
 	string indexFileName = tableName + "_" + attributeName + ".idx";
 
-	if (fexist(indexFileName))
+	if (!fexist(indexFileName))
 		return ret;
 	ret = ix->openFile(indexFileName, rm_IndexScanIterator.indexFileHandle);
 	if (ret != err::OK) {
